@@ -74,6 +74,7 @@ pub fn run() {
             pty::write_to_pty,
             pty::resize_pty,
             pty::close_pty_session,
+            pty::get_pty_cwd,
             ssh::create_ssh_session,
             ssh::write_to_ssh,
             ssh::resize_ssh,

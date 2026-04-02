@@ -29,6 +29,7 @@ export default function VaultUnlock({ onUnlock }: Props) {
 
   return (
     <div style={containerStyle}>
+      <div data-tauri-drag-region style={dragRegionStyle} />
       <div style={cardStyle}>
         <div style={{ textAlign: "center", marginBottom: 24 }}>
           <div style={lockIconStyle}>
@@ -80,7 +81,16 @@ export default function VaultUnlock({ onUnlock }: Props) {
   );
 }
 
+const dragRegionStyle: React.CSSProperties = {
+  position: "absolute",
+  top: 0,
+  left: 0,
+  right: 0,
+  height: 36,
+};
+
 const containerStyle: React.CSSProperties = {
+  position: "relative",
   display: "flex",
   alignItems: "center",
   justifyContent: "center",

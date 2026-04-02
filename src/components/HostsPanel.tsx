@@ -171,6 +171,16 @@ function HostListView({ hosts, onAdd, onEdit, onDelete, onConnect }: {
   onDelete: (id: number) => void;
   onConnect?: (h: Host) => void;
 }) {
+  const [search, setSearch] = useState("");
+
+  const filtered = search.trim()
+    ? hosts.filter(h => {
+        const q = search.toLowerCase();
+        return h.label.toLowerCase().includes(q)
+          || h.hostname.toLowerCase().includes(q);
+      })
+    : hosts;
+
   return (
     <>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
@@ -184,6 +194,15 @@ function HostListView({ hosts, onAdd, onEdit, onDelete, onConnect }: {
         </button>
       </div>
 
+      {hosts.length > 0 && (
+        <input
+          style={{ ...inputStyle, marginBottom: 16 }}
+          placeholder="Search by name or hostname..."
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+        />
+      )}
+
       {hosts.length === 0 ? (
         <div style={{
           display: "flex", flexDirection: "column", alignItems: "center",
@@ -193,8 +212,12 @@ function HostListView({ hosts, onAdd, onEdit, onDelete, onConnect }: {
           <p style={{ fontSize: 13, margin: 0 }}>No saved hosts</p>
           <p style={{ fontSize: 11, margin: 0, color: "#1e2330" }}>Add a host to get started</p>
         </div>
+      ) : filtered.length === 0 ? (
+        <div style={{ textAlign: "center", padding: "40px 0", color: "#4a5568", fontSize: 12 }}>
+          No hosts matching "{search}"
+        </div>
       ) : (
-        <HostList hosts={hosts} onEdit={onEdit} onDelete={onDelete} onConnect={onConnect} />
+        <HostList hosts={filtered} onEdit={onEdit} onDelete={onDelete} onConnect={onConnect} />
       )}
     </>
   );
@@ -296,7 +319,11 @@ function HostFormView({ form, setForm, editingId, hosts, onSave, onCancel }: {
           </div>
           <div>
             <div style={labelStyle}>Group (optional)</div>
-            <input style={inputStyle} placeholder="default" value={form.group} onChange={e => setForm(f => ({ ...f, group: e.target.value }))} />
+            <GroupComboBox
+              value={form.group}
+              onChange={v => setForm(f => ({ ...f, group: v }))}
+              groups={[...new Set(hosts.map(h => h.group).filter(g => g !== "default"))]}
+            />
           </div>
         </div>
       </div>
@@ -439,13 +466,79 @@ function HostFormView({ form, setForm, editingId, hosts, onSave, onCancel }: {
   );
 }
 
+function GroupComboBox({ value, onChange, groups }: {
+  value: string;
+  onChange: (v: string) => void;
+  groups: string[];
+}) {
+  const [open, setOpen] = useState(false);
+  const filtered = groups.filter(g =>
+    !value || g.toLowerCase().includes(value.toLowerCase())
+  );
+
+  return (
+    <div style={{ position: "relative" }}>
+      <input
+        style={inputStyle}
+        placeholder="default"
+        value={value}
+        onChange={e => { onChange(e.target.value); setOpen(true); }}
+        onFocus={() => { if (groups.length > 0) setOpen(true); }}
+      />
+      {open && filtered.length > 0 && (
+        <>
+          <div
+            style={{ position: "fixed", inset: 0, zIndex: 99 }}
+            onClick={() => setOpen(false)}
+          />
+          <div style={{
+            position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0,
+            zIndex: 100, borderRadius: 8, overflow: "hidden",
+            border: "1px solid #1e2330", background: "#0d1017",
+            boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
+            maxHeight: 160, overflowY: "auto",
+          }}>
+            {filtered.map(g => (
+              <button
+                key={g}
+                onClick={() => { onChange(g); setOpen(false); }}
+                style={{
+                  display: "block", width: "100%", padding: "8px 12px",
+                  background: "transparent", border: "none", cursor: "pointer",
+                  textAlign: "left", fontFamily: "inherit",
+                  borderBottom: "1px solid #111522",
+                  fontSize: 11, color: "#e2e8f0",
+                  transition: "background 0.1s",
+                }}
+                onMouseEnter={e => { e.currentTarget.style.background = "#111522"; }}
+                onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}
+              >
+                {g}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function AddHopPicker({ hosts, onAdd }: { hosts: Host[]; onAdd: (id: number) => void }) {
   const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+
+  const filtered = search.trim()
+    ? hosts.filter(h => {
+        const q = search.toLowerCase();
+        return h.label.toLowerCase().includes(q)
+          || h.hostname.toLowerCase().includes(q);
+      })
+    : hosts;
 
   return (
     <div style={{ position: "relative" }}>
       <button
-        onClick={() => setOpen(!open)}
+        onClick={() => { setOpen(!open); setSearch(""); }}
         style={{
           display: "flex", alignItems: "center", gap: 6, width: "100%",
           padding: "8px 10px", borderRadius: 7,
@@ -477,9 +570,23 @@ function AddHopPicker({ hosts, onAdd }: { hosts: Host[]; onAdd: (id: number) => 
             zIndex: 100, borderRadius: 8, overflow: "hidden",
             border: "1px solid #1e2330", background: "#0d1017",
             boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
-            maxHeight: 200, overflowY: "auto",
+            maxHeight: 240, display: "flex", flexDirection: "column",
           }}>
-            {hosts.map(h => (
+            <div style={{ padding: 8, borderBottom: "1px solid #1e2330", flexShrink: 0 }}>
+              <input
+                style={inputStyle}
+                placeholder="Search host..."
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                autoFocus
+              />
+            </div>
+            <div style={{ overflowY: "auto", flex: 1 }}>
+            {filtered.length === 0 ? (
+              <div style={{ padding: "12px 0", textAlign: "center", fontSize: 11, color: "#4a5568" }}>
+                No hosts found
+              </div>
+            ) : filtered.map(h => (
               <button
                 key={h.id}
                 onClick={() => { onAdd(h.id); setOpen(false); }}
@@ -501,6 +608,7 @@ function AddHopPicker({ hosts, onAdd }: { hosts: Host[]; onAdd: (id: number) => 
                 </div>
               </button>
             ))}
+            </div>
           </div>
         </>
       )}
@@ -514,6 +622,8 @@ function HostList({ hosts, onEdit, onDelete, onConnect }: {
   onDelete: (id: number) => void;
   onConnect?: (h: Host) => void;
 }) {
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+
   const groups = new Map<string, Host[]>();
   for (const host of hosts) {
     const g = host.group;
@@ -527,22 +637,41 @@ function HostList({ hosts, onEdit, onDelete, onConnect }: {
     return a.localeCompare(b);
   });
 
+  const toggleGroup = (group: string) => {
+    setCollapsed(prev => {
+      const next = new Set(prev);
+      next.has(group) ? next.delete(group) : next.add(group);
+      return next;
+    });
+  };
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       {sortedGroups.map(([group, groupHosts]) => (
         <div key={group}>
-          <div style={{
-            fontSize: 9, color: "#4a5568", fontWeight: 700,
-            letterSpacing: "0.08em", textTransform: "uppercase",
-            padding: "0 4px 6px",
-          }}>
+          <div
+            onClick={() => toggleGroup(group)}
+            style={{
+              fontSize: 9, color: "#4a5568", fontWeight: 700,
+              letterSpacing: "0.08em", textTransform: "uppercase",
+              padding: "0 4px 6px", cursor: "pointer",
+              display: "flex", alignItems: "center", gap: 6,
+            }}
+          >
+            <span style={{
+              fontSize: 8, transition: "transform 0.2s",
+              transform: collapsed.has(group) ? "rotate(-90deg)" : "rotate(0deg)",
+              display: "inline-block",
+            }}>▾</span>
             {group} · {groupHosts.length}
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            {groupHosts.map(host => (
-              <HostRow key={host.id} host={host} onEdit={onEdit} onDelete={onDelete} onConnect={onConnect} />
-            ))}
-          </div>
+          {!collapsed.has(group) && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              {groupHosts.map(host => (
+                <HostRow key={host.id} host={host} onEdit={onEdit} onDelete={onDelete} onConnect={onConnect} />
+              ))}
+            </div>
+          )}
         </div>
       ))}
     </div>

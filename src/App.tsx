@@ -83,7 +83,7 @@ export default function App() {
     setActiveView("terminals");
   }, [workspace.dispatch]);
 
-  const onOpenSftp = useCallback((paneId: number) => {
+  const onOpenSftp = useCallback(async (paneId: number) => {
     const pane = workspace.state.panes.get(paneId);
     if (!pane) return;
 
@@ -93,12 +93,20 @@ export default function App() {
       : { type: "local" as const };
     const label = isRemote ? `SFTP: ${pane.name}` : "Files";
 
+    let initialPath: string | undefined;
+    if (!isRemote) {
+      try {
+        initialPath = await invoke<string>("get_pty_cwd", { sessionId: pane.sessionId });
+      } catch {}
+    }
+
     workspace.dispatch({
       type: "NEW_SFTP",
       paneId: genPaneId(),
       tabId: genTabId(),
       source,
       label,
+      initialPath,
     });
   }, [workspace.state.panes, workspace.dispatch]);
 

@@ -85,6 +85,7 @@ export default function VaultSetup({ onComplete }: Props) {
 
   return (
     <div style={containerStyle}>
+      <div data-tauri-drag-region style={dragRegionStyle} />
       <div style={cardStyle}>
         <div style={{ textAlign: "center", marginBottom: 32 }}>
           <h1 style={{ fontSize: 22, fontWeight: 600, margin: 0, color: "#e2e8f0" }}>
@@ -217,7 +218,16 @@ export default function VaultSetup({ onComplete }: Props) {
   );
 }
 
+const dragRegionStyle: React.CSSProperties = {
+  position: "absolute",
+  top: 0,
+  left: 0,
+  right: 0,
+  height: 36,
+};
+
 const containerStyle: React.CSSProperties = {
+  position: "relative",
   display: "flex",
   alignItems: "center",
   justifyContent: "center",

@@ -29,6 +29,26 @@ export default function TransferBar({ transfer }: Props) {
     );
   }
 
+  if (transfer.status === "preparing") {
+    return (
+      <div style={{
+        padding: "6px 12px", borderTop: "1px solid #161925", background: "#0e1220",
+        fontSize: 11, color: "#94a3b8", flexShrink: 0,
+        display: "flex", justifyContent: "space-between", alignItems: "center",
+      }}>
+        <span>Preparing: {transfer.file_name}...</span>
+        <button
+          onClick={() => invoke("sftp_cancel_transfer", { transferId: transfer.transfer_id })}
+          style={{
+            background: "none", border: "1px solid #ef4444", borderRadius: 3,
+            color: "#ef4444", fontSize: 10, padding: "1px 6px", cursor: "pointer",
+            lineHeight: "14px",
+          }}
+        >✕</button>
+      </div>
+    );
+  }
+
   return (
     <div style={{
       padding: "6px 12px", borderTop: "1px solid #161925", background: "#0e1220",

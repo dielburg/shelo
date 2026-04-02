@@ -488,16 +488,18 @@ export default function FileBrowser({ pane }: Props) {
   }, []);
 
   useEffect(() => {
+    let hideTimer: ReturnType<typeof setTimeout> | null = null;
     const unlisten = listen<TransferProgress>("transfer-progress", (event) => {
       if (transferOwnerPaneId !== null && transferOwnerPaneId !== pane.id) return;
       const p = event.payload;
+      if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
       if (p.status === "done" || p.status === "cancelled") {
         setTransfer(p);
         if (p.status === "done") listDir(currentPath);
-        setTimeout(() => setTransfer(null), 3000);
+        hideTimer = setTimeout(() => setTransfer(null), 3000);
       } else { setTransfer(p); }
     });
-    return () => { unlisten.then(fn => fn()); };
+    return () => { unlisten.then(fn => fn()); if (hideTimer) clearTimeout(hideTimer); };
   }, [pane.id, currentPath, listDir]);
 
   useEffect(() => {

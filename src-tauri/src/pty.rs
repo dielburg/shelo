@@ -17,6 +17,7 @@ struct PtyOutput {
 struct PtySession {
     writer: Box<dyn Write + Send>,
     master: Box<dyn portable_pty::MasterPty + Send>,
+    child_pid: Option<u32>,
 }
 
 type Sessions = Arc<Mutex<HashMap<u32, PtySession>>>;
@@ -67,10 +68,11 @@ pub fn create_pty_session(session_id: u32, rows: u16, cols: u16, app: AppHandle)
         cmd.env("TERM", "xterm-256color");
     }
 
-    let _child = pair.slave.spawn_command(cmd).map_err(|e| {
+    let child = pair.slave.spawn_command(cmd).map_err(|e| {
         error!(session_id, error = %e, "Failed to spawn shell");
         e.to_string()
     })?;
+    let child_pid = child.process_id();
 
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
     let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
@@ -80,6 +82,7 @@ pub fn create_pty_session(session_id: u32, rows: u16, cols: u16, app: AppHandle)
         PtySession {
             writer,
             master: pair.master,
+            child_pid,
         },
     );
 
@@ -156,4 +159,78 @@ pub fn close_pty_session(session_id: u32, app: AppHandle) -> Result<(), String> 
         info!(session_id, "PTY session closed");
     }
     Ok(())
+}
+
+#[tauri::command]
+pub fn get_pty_cwd(session_id: u32, app: AppHandle) -> Result<String, String> {
+    let state = app.state::<PtyState>();
+    let sessions = state.sessions.lock().unwrap();
+
+    let session = sessions.get(&session_id).ok_or("Session not found")?;
+    let pid = session.child_pid.ok_or("No PID available")?;
+
+    get_cwd_for_pid(pid)
+}
+
+#[cfg(target_os = "linux")]
+fn get_cwd_for_pid(pid: u32) -> Result<String, String> {
+    std::fs::read_link(format!("/proc/{}/cwd", pid))
+        .map(|p| p.to_string_lossy().to_string())
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn get_cwd_for_pid(pid: u32) -> Result<String, String> {
+    const PROC_PIDVNODEPATHINFO: i32 = 9;
+    const MAXPATHLEN: usize = 1024;
+
+    #[repr(C)]
+    struct VnodeInfoPath {
+        _vip_vi: [u8; 152],
+        vip_path: [u8; MAXPATHLEN],
+    }
+
+    #[repr(C)]
+    struct ProcVnodePathInfo {
+        pvi_cdir: VnodeInfoPath,
+        _pvi_rdir: VnodeInfoPath,
+    }
+
+    extern "C" {
+        fn proc_pidinfo(
+            pid: i32,
+            flavor: i32,
+            arg: u64,
+            buffer: *mut std::ffi::c_void,
+            buffersize: i32,
+        ) -> i32;
+    }
+
+    let mut info = std::mem::MaybeUninit::<ProcVnodePathInfo>::zeroed();
+    let ret = unsafe {
+        proc_pidinfo(
+            pid as i32,
+            PROC_PIDVNODEPATHINFO,
+            0,
+            info.as_mut_ptr() as *mut std::ffi::c_void,
+            std::mem::size_of::<ProcVnodePathInfo>() as i32,
+        )
+    };
+
+    if ret <= 0 {
+        return Err(format!("proc_pidinfo failed for pid {}", pid));
+    }
+
+    let info = unsafe { info.assume_init() };
+    let path = unsafe {
+        std::ffi::CStr::from_ptr(info.pvi_cdir.vip_path.as_ptr() as *const std::ffi::c_char)
+    };
+
+    Ok(path.to_string_lossy().to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn get_cwd_for_pid(pid: u32) -> Result<String, String> {
+    std::env::var("USERPROFILE")
+        .map_err(|_| "Could not determine cwd".to_string())
 }

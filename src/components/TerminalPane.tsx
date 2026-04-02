@@ -103,6 +103,8 @@ export default function TerminalPane({ sessionId, isFocused, kind, hostId, onClo
         brightWhite: "#f8fafc",
       },
       fontFamily: "'JetBrainsMono Nerd Font', 'JetBrains Mono', monospace",
+      fontWeight: 400,
+      fontWeightBold: 700,
       fontSize: 13,
       lineHeight: 1.5,
       cursorBlink: true,

@@ -16,9 +16,16 @@ pub async fn sftp_upload(
     remote_dir: String,
     dest_name: Option<String>,
     app: AppHandle,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let transfer_id = format!("up-{}-{}", session_id, chrono::Utc::now().timestamp_millis());
     info!(session_id, path = %local_path, dest = %remote_dir, "Starting upload");
+
+    let cancel_flag = Arc::new(AtomicBool::new(false));
+    {
+        let sftp_state = app.state::<SftpState>();
+        let mut transfers = sftp_state.active_transfers.lock().await;
+        transfers.insert(transfer_id.clone(), cancel_flag.clone());
+    }
 
     let local = std::path::Path::new(&local_path);
     let file_name = dest_name.unwrap_or_else(|| {
@@ -27,10 +34,34 @@ pub async fn sftp_upload(
             .unwrap_or_else(|| "unknown".to_string())
     });
 
-    if local.is_dir() {
-        upload_dir_recursive(session_id, local, &remote_dir, &transfer_id, &app).await
+    let result = if local.is_dir() {
+        upload_dir_recursive(session_id, local, &remote_dir, &transfer_id, &cancel_flag, &app).await
     } else {
-        upload_single_file(session_id, local, &remote_dir, &file_name, &transfer_id, 0, 1, &app).await
+        upload_single_file(session_id, local, &remote_dir, &file_name, &transfer_id, 0, 1, &cancel_flag, &app).await
+    };
+
+    let cancelled = cancel_flag.load(Ordering::Relaxed);
+    {
+        let sftp_state = app.state::<SftpState>();
+        let mut transfers = sftp_state.active_transfers.lock().await;
+        transfers.remove(&transfer_id);
+    }
+
+    let _ = app.emit("transfer-progress", TransferProgress {
+        transfer_id: transfer_id.clone(),
+        file_name: file_name.clone(),
+        bytes_transferred: 0,
+        total_bytes: 0,
+        files_done: 0,
+        files_total: 0,
+        speed_bps: 0,
+        status: if cancelled { "cancelled" } else { "done" }.to_string(),
+    });
+
+    match result {
+        Ok(_) => Ok(transfer_id),
+        Err(e) if e == "Transfer cancelled" => Ok(transfer_id),
+        Err(e) => Err(e),
     }
 }
 
@@ -42,8 +73,13 @@ async fn upload_single_file(
     transfer_id: &str,
     file_index: u32,
     files_total: u32,
+    cancel_flag: &Arc<AtomicBool>,
     app: &AppHandle,
 ) -> Result<(), String> {
+    if cancel_flag.load(Ordering::Relaxed) {
+        return Err("Transfer cancelled".to_string());
+    }
+
     let data = tokio::fs::read(local_path).await.map_err(map_local_error)?;
     let total_bytes = data.len() as u64;
 
@@ -65,6 +101,10 @@ async fn upload_single_file(
     let mut bytes_written: u64 = 0;
 
     for chunk in data.chunks(CHUNK_SIZE) {
+        if cancel_flag.load(Ordering::Relaxed) {
+            return Err("Transfer cancelled".to_string());
+        }
+
         use tokio::io::AsyncWriteExt;
         timeout(SFTP_TRANSFER_TIMEOUT, file.write_all(chunk))
             .await
@@ -91,17 +131,6 @@ async fn upload_single_file(
     use tokio::io::AsyncWriteExt;
     let _ = timeout(SFTP_OP_TIMEOUT, file.shutdown()).await;
 
-    let _ = app.emit("transfer-progress", TransferProgress {
-        transfer_id: transfer_id.to_string(),
-        file_name: file_name.to_string(),
-        bytes_transferred: total_bytes,
-        total_bytes,
-        files_done: file_index + 1,
-        files_total,
-        speed_bps: 0,
-        status: "done".to_string(),
-    });
-
     Ok(())
 }
 
@@ -110,8 +139,24 @@ async fn upload_dir_recursive(
     local_dir: &std::path::Path,
     remote_base: &str,
     transfer_id: &str,
+    cancel_flag: &Arc<AtomicBool>,
     app: &AppHandle,
 ) -> Result<(), String> {
+    let dir_name = local_dir.file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    let _ = app.emit("transfer-progress", TransferProgress {
+        transfer_id: transfer_id.to_string(),
+        file_name: dir_name,
+        bytes_transferred: 0,
+        total_bytes: 0,
+        files_done: 0,
+        files_total: 0,
+        speed_bps: 0,
+        status: "preparing".to_string(),
+    });
+
     let mut files: Vec<(std::path::PathBuf, String)> = Vec::new();
     collect_local_files(local_dir, local_dir, remote_base, &mut files).map_err(|e| map_local_error(e))?;
 
@@ -137,6 +182,9 @@ async fn upload_dir_recursive(
         let mut sorted_dirs: Vec<String> = dirs.into_iter().collect();
         sorted_dirs.sort();
         for dir in &sorted_dirs {
+            if cancel_flag.load(Ordering::Relaxed) {
+                return Err("Transfer cancelled".to_string());
+            }
             let exists = timeout(SFTP_STAT_TIMEOUT, sftp.try_exists(dir.as_str()))
                 .await
                 .map_err(|_| timeout_msg("Check dir"))?
@@ -154,7 +202,7 @@ async fn upload_dir_recursive(
         };
         let remote_dir = if remote_dir.is_empty() { "/".to_string() } else { remote_dir };
 
-        upload_single_file(session_id, local_path, &remote_dir, &file_name, transfer_id, i as u32, files_total, app).await?;
+        upload_single_file(session_id, local_path, &remote_dir, &file_name, transfer_id, i as u32, files_total, cancel_flag, app).await?;
     }
 
     Ok(())
@@ -196,7 +244,7 @@ pub async fn sftp_upload_paths(
 ) -> Result<(), String> {
     for (i, path) in paths.iter().enumerate() {
         let name = dest_names.as_ref().and_then(|n| n.get(i).cloned());
-        sftp_upload(session_id, path.clone(), remote_dir.clone(), name, app.clone()).await?;
+        sftp_upload(session_id, path.clone(), remote_dir.clone(), name, app.clone()).await.map(|_| ())?;
     }
     Ok(())
 }
@@ -209,17 +257,49 @@ pub async fn sftp_download(
     is_dir: bool,
     dest_name: Option<String>,
     app: AppHandle,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let transfer_id = format!("dl-{}-{}", session_id, chrono::Utc::now().timestamp_millis());
     info!(session_id, path = %remote_path, dest = %local_dir, "Starting download");
 
-    if is_dir {
-        download_dir_recursive(session_id, &remote_path, &local_dir, &transfer_id, &app).await
+    let cancel_flag = Arc::new(AtomicBool::new(false));
+    {
+        let sftp_state = app.state::<SftpState>();
+        let mut transfers = sftp_state.active_transfers.lock().await;
+        transfers.insert(transfer_id.clone(), cancel_flag.clone());
+    }
+
+    let file_name = dest_name.unwrap_or_else(|| {
+        remote_path.rsplit('/').next().unwrap_or("file").to_string()
+    });
+
+    let result = if is_dir {
+        download_dir_recursive(session_id, &remote_path, &local_dir, &transfer_id, &cancel_flag, &app).await
     } else {
-        let file_name = dest_name.unwrap_or_else(|| {
-            remote_path.rsplit('/').next().unwrap_or("file").to_string()
-        });
-        download_single_file(session_id, &remote_path, &local_dir, &file_name, &transfer_id, 0, 1, &app).await
+        download_single_file(session_id, &remote_path, &local_dir, &file_name, &transfer_id, 0, 1, &cancel_flag, &app).await
+    };
+
+    let cancelled = cancel_flag.load(Ordering::Relaxed);
+    {
+        let sftp_state = app.state::<SftpState>();
+        let mut transfers = sftp_state.active_transfers.lock().await;
+        transfers.remove(&transfer_id);
+    }
+
+    let _ = app.emit("transfer-progress", TransferProgress {
+        transfer_id: transfer_id.clone(),
+        file_name: file_name.clone(),
+        bytes_transferred: 0,
+        total_bytes: 0,
+        files_done: 0,
+        files_total: 0,
+        speed_bps: 0,
+        status: if cancelled { "cancelled" } else { "done" }.to_string(),
+    });
+
+    match result {
+        Ok(_) => Ok(transfer_id),
+        Err(e) if e == "Transfer cancelled" => Ok(transfer_id),
+        Err(e) => Err(e),
     }
 }
 
@@ -231,8 +311,13 @@ async fn download_single_file(
     transfer_id: &str,
     file_index: u32,
     files_total: u32,
+    cancel_flag: &Arc<AtomicBool>,
     app: &AppHandle,
 ) -> Result<(), String> {
+    if cancel_flag.load(Ordering::Relaxed) {
+        return Err("Transfer cancelled".to_string());
+    }
+
     let session_arc = get_session(app, session_id).await?;
     let sftp = session_arc.lock().await;
 
@@ -264,6 +349,10 @@ async fn download_single_file(
     let mut buf = vec![0u8; CHUNK_SIZE];
 
     loop {
+        if cancel_flag.load(Ordering::Relaxed) {
+            return Err("Transfer cancelled".to_string());
+        }
+
         use tokio::io::AsyncReadExt;
         let n = timeout(SFTP_TRANSFER_TIMEOUT, file.read(&mut buf))
             .await
@@ -294,17 +383,6 @@ async fn download_single_file(
     let local_path = format!("{}/{}", local_dir.trim_end_matches('/'), file_name);
     tokio::fs::write(&local_path, &data).await.map_err(map_local_error)?;
 
-    let _ = app.emit("transfer-progress", TransferProgress {
-        transfer_id: transfer_id.to_string(),
-        file_name: file_name.to_string(),
-        bytes_transferred: total_bytes,
-        total_bytes,
-        files_done: file_index + 1,
-        files_total,
-        speed_bps: 0,
-        status: "done".to_string(),
-    });
-
     Ok(())
 }
 
@@ -313,11 +391,23 @@ async fn download_dir_recursive(
     remote_dir: &str,
     local_base: &str,
     transfer_id: &str,
+    cancel_flag: &Arc<AtomicBool>,
     app: &AppHandle,
 ) -> Result<(), String> {
     let dir_name = remote_dir.rsplit('/').next().unwrap_or("folder");
     let local_root = format!("{}/{}", local_base.trim_end_matches('/'), dir_name);
     tokio::fs::create_dir_all(&local_root).await.map_err(map_local_error)?;
+
+    let _ = app.emit("transfer-progress", TransferProgress {
+        transfer_id: transfer_id.to_string(),
+        file_name: dir_name.to_string(),
+        bytes_transferred: 0,
+        total_bytes: 0,
+        files_done: 0,
+        files_total: 0,
+        speed_bps: 0,
+        status: "preparing".to_string(),
+    });
 
     let mut files: Vec<(String, String)> = Vec::new();
     collect_remote_files(session_id, remote_dir, &local_root, &mut files, app).await?;
@@ -325,19 +415,8 @@ async fn download_dir_recursive(
     let files_total = files.len() as u32;
     for (i, (rpath, ldir)) in files.iter().enumerate() {
         let fname = rpath.rsplit('/').next().unwrap_or("file").to_string();
-        download_single_file(session_id, rpath, ldir, &fname, transfer_id, i as u32, files_total, app).await?;
+        download_single_file(session_id, rpath, ldir, &fname, transfer_id, i as u32, files_total, cancel_flag, app).await?;
     }
-
-    let _ = app.emit("transfer-progress", TransferProgress {
-        transfer_id: transfer_id.to_string(),
-        file_name: dir_name.to_string(),
-        bytes_transferred: 0,
-        total_bytes: 0,
-        files_done: files_total,
-        files_total,
-        speed_bps: 0,
-        status: "done".to_string(),
-    });
 
     Ok(())
 }
