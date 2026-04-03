@@ -216,8 +216,12 @@ function GeneralSettings({ updateInfo, onUpdateChecked }: {
                 Update available: v{updateVersion}
               </div>
               {updateNotes && (
-                <div style={{ fontSize: 11, color: "#94a3b8", lineHeight: 1.5 }}>
-                  {updateNotes}
+                <div style={{
+                  fontSize: 11, color: "#94a3b8", lineHeight: 1.5,
+                  maxHeight: 200, overflowY: "auto",
+                  marginTop: 4, paddingRight: 4,
+                }}>
+                  {renderChangelogNotes(updateNotes)}
                 </div>
               )}
             </div>
@@ -265,6 +269,51 @@ function GeneralSettings({ updateInfo, onUpdateChecked }: {
       </SettingsRow>
     </div>
   );
+}
+
+function renderChangelogNotes(notes: string) {
+  const lines = notes.split("\n");
+  const elements: React.ReactNode[] = [];
+  let listItems: string[] = [];
+  let key = 0;
+
+  const flushList = () => {
+    if (listItems.length > 0) {
+      elements.push(
+        <ul key={key++} style={{ margin: "4px 0", paddingLeft: 18 }}>
+          {listItems.map((item, i) => (
+            <li key={i} style={{ marginBottom: 2 }}>{item}</li>
+          ))}
+        </ul>
+      );
+      listItems = [];
+    }
+  };
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      flushList();
+      continue;
+    }
+    if (trimmed.startsWith("### ")) {
+      flushList();
+      elements.push(
+        <div key={key++} style={{ fontSize: 11, fontWeight: 600, color: "#cbd5e1", marginTop: elements.length > 0 ? 8 : 0, marginBottom: 2 }}>
+          {trimmed.slice(4)}
+        </div>
+      );
+    } else if (trimmed.startsWith("- ")) {
+      listItems.push(trimmed.slice(2));
+    } else {
+      flushList();
+      elements.push(
+        <div key={key++} style={{ marginBottom: 4 }}>{trimmed}</div>
+      );
+    }
+  }
+  flushList();
+  return elements;
 }
 
 function formatBytes(bytes: number): string {
