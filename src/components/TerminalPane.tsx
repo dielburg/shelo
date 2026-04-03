@@ -142,6 +142,19 @@ export default function TerminalPane({ sessionId, isFocused, kind, hostId, onClo
       }, 150);
     }
 
+    if (!navigator.platform.toUpperCase().includes("MAC")) {
+      term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
+        if (e.ctrlKey && e.shiftKey && e.key === "C" && e.type === "keydown") {
+          const sel = term.getSelection();
+          if (sel) {
+            navigator.clipboard.writeText(sel).catch(console.error);
+          }
+          return false;
+        }
+        return true;
+      });
+    }
+
     term.onData((data) => {
       invoke(writeCmd, { sessionId, data }).catch(console.error);
     });
