@@ -80,8 +80,8 @@ async fn upload_single_file(
         return Err("Transfer cancelled".to_string());
     }
 
-    let data = tokio::fs::read(local_path).await.map_err(map_local_error)?;
-    let total_bytes = data.len() as u64;
+    let local_meta = tokio::fs::metadata(local_path).await.map_err(map_local_error)?;
+    let total_bytes = local_meta.len();
 
     let remote_path = if remote_dir == "/" {
         format!("/{}", file_name)
@@ -92,26 +92,32 @@ async fn upload_single_file(
     let session_arc = get_session(app, session_id).await?;
     let sftp = session_arc.lock().await;
 
-    let mut file = timeout(SFTP_OP_TIMEOUT, sftp.create(&remote_path))
+    let mut remote_file = timeout(SFTP_OP_TIMEOUT, sftp.create(&remote_path))
         .await
         .map_err(|_| timeout_msg("Create remote file"))?
         .map_err(map_sftp_error)?;
 
+    let mut local_file = tokio::fs::File::open(local_path).await.map_err(map_local_error)?;
+    let mut buf = vec![0u8; CHUNK_SIZE];
     let start = std::time::Instant::now();
     let mut bytes_written: u64 = 0;
 
-    for chunk in data.chunks(CHUNK_SIZE) {
+    loop {
         if cancel_flag.load(Ordering::Relaxed) {
             return Err("Transfer cancelled".to_string());
         }
 
+        use tokio::io::AsyncReadExt;
+        let n = local_file.read(&mut buf).await.map_err(map_local_error)?;
+        if n == 0 { break; }
+
         use tokio::io::AsyncWriteExt;
-        timeout(SFTP_TRANSFER_TIMEOUT, file.write_all(chunk))
+        timeout(SFTP_TRANSFER_TIMEOUT, remote_file.write_all(&buf[..n]))
             .await
             .map_err(|_| timeout_msg("Upload data"))?
             .map_err(|e| format!("Write error: {}", e))?;
 
-        bytes_written += chunk.len() as u64;
+        bytes_written += n as u64;
 
         let elapsed = start.elapsed().as_secs_f64().max(0.001);
         let speed = (bytes_written as f64 / elapsed) as u64;
@@ -129,7 +135,7 @@ async fn upload_single_file(
     }
 
     use tokio::io::AsyncWriteExt;
-    let _ = timeout(SFTP_OP_TIMEOUT, file.shutdown()).await;
+    let _ = timeout(SFTP_OP_TIMEOUT, remote_file.shutdown()).await;
 
     Ok(())
 }
@@ -340,13 +346,17 @@ async fn download_single_file(
 
     let start = std::time::Instant::now();
 
-    let mut file = timeout(SFTP_OP_TIMEOUT, sftp.open(remote_path))
+    let mut remote_file = timeout(SFTP_OP_TIMEOUT, sftp.open(remote_path))
         .await
         .map_err(|_| timeout_msg("Open remote file"))?
         .map_err(map_sftp_error)?;
 
-    let mut data = Vec::with_capacity(total_bytes as usize);
+    drop(sftp);
+
+    let local_path = format!("{}/{}", local_dir.trim_end_matches('/'), file_name);
+    let mut local_file = tokio::fs::File::create(&local_path).await.map_err(map_local_error)?;
     let mut buf = vec![0u8; CHUNK_SIZE];
+    let mut bytes_downloaded: u64 = 0;
 
     loop {
         if cancel_flag.load(Ordering::Relaxed) {
@@ -354,21 +364,25 @@ async fn download_single_file(
         }
 
         use tokio::io::AsyncReadExt;
-        let n = timeout(SFTP_TRANSFER_TIMEOUT, file.read(&mut buf))
+        let n = timeout(SFTP_TRANSFER_TIMEOUT, remote_file.read(&mut buf))
             .await
             .map_err(|_| timeout_msg("Download data"))?
             .map_err(|e| format!("Read error: {}", e))?;
 
         if n == 0 { break; }
-        data.extend_from_slice(&buf[..n]);
+
+        use tokio::io::AsyncWriteExt;
+        local_file.write_all(&buf[..n]).await.map_err(map_local_error)?;
+
+        bytes_downloaded += n as u64;
 
         let elapsed = start.elapsed().as_secs_f64().max(0.001);
-        let speed = (data.len() as f64 / elapsed) as u64;
+        let speed = (bytes_downloaded as f64 / elapsed) as u64;
 
         let _ = app.emit("transfer-progress", TransferProgress {
             transfer_id: transfer_id.to_string(),
             file_name: file_name.to_string(),
-            bytes_transferred: data.len() as u64,
+            bytes_transferred: bytes_downloaded,
             total_bytes,
             files_done: file_index,
             files_total,
@@ -376,12 +390,6 @@ async fn download_single_file(
             status: "downloading".to_string(),
         });
     }
-
-    drop(file);
-    drop(sftp);
-
-    let local_path = format!("{}/{}", local_dir.trim_end_matches('/'), file_name);
-    tokio::fs::write(&local_path, &data).await.map_err(map_local_error)?;
 
     Ok(())
 }
