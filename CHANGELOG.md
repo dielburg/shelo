@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.1.2
+
+### Bug Fixes
+
+- Fix Ctrl+Shift+C not copying selected text in terminal on Windows and Linux
+- Fix SFTP upload and download loading entire files into memory instead of streaming
+- Fix update changelog displayed as unformatted single-line text
+
 ## v0.1.1
 
 First patch, totally not because v0.1.0 was unusable.
