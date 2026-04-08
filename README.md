@@ -4,6 +4,8 @@
 
 # shelo
 
+> ⚠️ **Note:** This project is still in its early stages! Expect some rough edges, a few bugs, and missing functionalities as things take shape. If you're cool with that and want to join the ride anyway – thank you so much for being here. Welcome to the `shelo` community! 💙
+
 A free, cross-platform terminal and SSH client inspired by [Termius](https://termius.com/). Built with Tauri, React, and Rust.
 
 The goal behind shelo is simple — I love Termius and its UI approach to terminal management, but wanted a free and open-source alternative that feels just as good. If you've ever wished for a Termius-like experience without the price tag, this is for you.
