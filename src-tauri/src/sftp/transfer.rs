@@ -37,7 +37,7 @@ pub async fn sftp_upload(
     let result = if local.is_dir() {
         upload_dir_recursive(session_id, local, &remote_dir, &transfer_id, &cancel_flag, &app).await
     } else {
-        upload_single_file(session_id, local, &remote_dir, &file_name, &transfer_id, 0, 1, &cancel_flag, &app).await
+        upload_single_file(session_id, local, &remote_dir, &file_name, &transfer_id, 0, 1, 0, 0, &cancel_flag, &app).await
     };
 
     let cancelled = cancel_flag.load(Ordering::Relaxed);
@@ -55,6 +55,8 @@ pub async fn sftp_upload(
         files_done: 0,
         files_total: 0,
         speed_bps: 0,
+        total_bytes_all: 0,
+        bytes_transferred_all: 0,
         status: if cancelled { "cancelled" } else { "done" }.to_string(),
     });
 
@@ -73,6 +75,8 @@ async fn upload_single_file(
     transfer_id: &str,
     file_index: u32,
     files_total: u32,
+    total_bytes_all: u64,
+    bytes_done_before: u64,
     cancel_flag: &Arc<AtomicBool>,
     app: &AppHandle,
 ) -> Result<(), String> {
@@ -130,6 +134,8 @@ async fn upload_single_file(
             files_done: file_index,
             files_total,
             speed_bps: speed,
+            total_bytes_all,
+            bytes_transferred_all: bytes_done_before + bytes_written,
             status: "uploading".to_string(),
         });
     }
@@ -160,6 +166,8 @@ async fn upload_dir_recursive(
         files_done: 0,
         files_total: 0,
         speed_bps: 0,
+        total_bytes_all: 0,
+        bytes_transferred_all: 0,
         status: "preparing".to_string(),
     });
 
@@ -167,6 +175,13 @@ async fn upload_dir_recursive(
     collect_local_files(local_dir, local_dir, remote_base, &mut files).map_err(|e| map_local_error(e))?;
 
     let files_total = files.len() as u32;
+
+    let mut total_bytes_all: u64 = 0;
+    for (local_path, _) in &files {
+        if let Ok(meta) = tokio::fs::metadata(local_path).await {
+            total_bytes_all += meta.len();
+        }
+    }
 
     let mut dirs: std::collections::HashSet<String> = std::collections::HashSet::new();
     for (_, remote_path) in &files {
@@ -201,6 +216,7 @@ async fn upload_dir_recursive(
         }
     }
 
+    let mut bytes_done_before: u64 = 0;
     for (i, (local_path, remote_path)) in files.iter().enumerate() {
         let (remote_dir, file_name) = match remote_path.rfind('/') {
             Some(pos) => (remote_path[..pos].to_string(), remote_path[pos + 1..].to_string()),
@@ -208,7 +224,9 @@ async fn upload_dir_recursive(
         };
         let remote_dir = if remote_dir.is_empty() { "/".to_string() } else { remote_dir };
 
-        upload_single_file(session_id, local_path, &remote_dir, &file_name, transfer_id, i as u32, files_total, cancel_flag, app).await?;
+        let file_size = tokio::fs::metadata(local_path).await.map(|m| m.len()).unwrap_or(0);
+        upload_single_file(session_id, local_path, &remote_dir, &file_name, transfer_id, i as u32, files_total, total_bytes_all, bytes_done_before, cancel_flag, app).await?;
+        bytes_done_before += file_size;
     }
 
     Ok(())
@@ -248,10 +266,118 @@ pub async fn sftp_upload_paths(
     remote_dir: String,
     app: AppHandle,
 ) -> Result<(), String> {
-    for (i, path) in paths.iter().enumerate() {
-        let name = dest_names.as_ref().and_then(|n| n.get(i).cloned());
-        sftp_upload(session_id, path.clone(), remote_dir.clone(), name, app.clone()).await.map(|_| ())?;
+    if paths.len() <= 1 {
+        for (i, path) in paths.iter().enumerate() {
+            let name = dest_names.as_ref().and_then(|n| n.get(i).cloned());
+            sftp_upload(session_id, path.clone(), remote_dir.clone(), name, app.clone()).await.map(|_| ())?;
+        }
+        return Ok(());
     }
+
+    let transfer_id = format!("up-{}-{}", session_id, chrono::Utc::now().timestamp_millis());
+    info!(session_id, count = paths.len(), dest = %remote_dir, "Starting multi-file upload");
+
+    let cancel_flag = Arc::new(AtomicBool::new(false));
+    {
+        let sftp_state = app.state::<SftpState>();
+        let mut transfers = sftp_state.active_transfers.lock().await;
+        transfers.insert(transfer_id.clone(), cancel_flag.clone());
+    }
+
+    let mut all_files: Vec<(std::path::PathBuf, String, String)> = Vec::new();
+    for (i, path) in paths.iter().enumerate() {
+        let local = std::path::Path::new(path);
+        let file_name = dest_names.as_ref()
+            .and_then(|n| n.get(i).cloned())
+            .unwrap_or_else(|| {
+                local.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "unknown".to_string())
+            });
+
+        if local.is_dir() {
+            let mut dir_files: Vec<(std::path::PathBuf, String)> = Vec::new();
+            collect_local_files(local, local, &remote_dir, &mut dir_files).map_err(map_local_error)?;
+
+            let mut dirs: std::collections::HashSet<String> = std::collections::HashSet::new();
+            for (_, rp) in &dir_files {
+                if let Some(pos) = rp.rfind('/') {
+                    let parent = &rp[..pos];
+                    let parts: Vec<&str> = parent.split('/').filter(|s| !s.is_empty()).collect();
+                    let mut cur = String::new();
+                    for part in parts {
+                        cur = if cur.is_empty() { format!("/{}", part) } else { format!("{}/{}", cur, part) };
+                        dirs.insert(cur.clone());
+                    }
+                }
+            }
+            {
+                let session_arc = get_session(&app, session_id).await?;
+                let sftp = session_arc.lock().await;
+                let mut sorted_dirs: Vec<String> = dirs.into_iter().collect();
+                sorted_dirs.sort();
+                for dir in &sorted_dirs {
+                    let exists = timeout(SFTP_STAT_TIMEOUT, sftp.try_exists(dir.as_str()))
+                        .await
+                        .map_err(|_| timeout_msg("Check dir"))?
+                        .map_err(map_sftp_error)?;
+                    if !exists {
+                        let _ = timeout(SFTP_OP_TIMEOUT, sftp.create_dir(dir.as_str())).await;
+                    }
+                }
+            }
+
+            for (lp, rp) in dir_files {
+                let (rd, fn_) = match rp.rfind('/') {
+                    Some(pos) => (rp[..pos].to_string(), rp[pos + 1..].to_string()),
+                    None => ("/".to_string(), rp),
+                };
+                let rd = if rd.is_empty() { "/".to_string() } else { rd };
+                all_files.push((lp, rd, fn_));
+            }
+        } else {
+            all_files.push((local.to_path_buf(), remote_dir.clone(), file_name));
+        }
+    }
+
+    let files_total = all_files.len() as u32;
+    let mut total_bytes_all: u64 = 0;
+    for (lp, _, _) in &all_files {
+        if let Ok(meta) = tokio::fs::metadata(lp).await {
+            total_bytes_all += meta.len();
+        }
+    }
+
+    let mut bytes_done_before: u64 = 0;
+    for (i, (local_path, rdir, fname)) in all_files.iter().enumerate() {
+        if cancel_flag.load(Ordering::Relaxed) {
+            break;
+        }
+        let file_size = tokio::fs::metadata(local_path).await.map(|m| m.len()).unwrap_or(0);
+        upload_single_file(session_id, local_path, rdir, fname, &transfer_id, i as u32, files_total, total_bytes_all, bytes_done_before, &cancel_flag, &app).await?;
+        bytes_done_before += file_size;
+    }
+
+    let cancelled = cancel_flag.load(Ordering::Relaxed);
+    {
+        let sftp_state = app.state::<SftpState>();
+        let mut transfers = sftp_state.active_transfers.lock().await;
+        transfers.remove(&transfer_id);
+    }
+
+    let _ = app.emit("transfer-progress", TransferProgress {
+        transfer_id,
+        file_name: "".to_string(),
+        bytes_transferred: 0,
+        total_bytes: 0,
+        files_done: 0,
+        files_total: 0,
+        speed_bps: 0,
+        total_bytes_all: 0,
+        bytes_transferred_all: 0,
+        status: if cancelled { "cancelled" } else { "done" }.to_string(),
+    });
+
     Ok(())
 }
 
@@ -281,7 +407,7 @@ pub async fn sftp_download(
     let result = if is_dir {
         download_dir_recursive(session_id, &remote_path, &local_dir, &transfer_id, &cancel_flag, &app).await
     } else {
-        download_single_file(session_id, &remote_path, &local_dir, &file_name, &transfer_id, 0, 1, &cancel_flag, &app).await
+        download_single_file(session_id, &remote_path, &local_dir, &file_name, &transfer_id, 0, 1, 0, 0, &cancel_flag, &app).await
     };
 
     let cancelled = cancel_flag.load(Ordering::Relaxed);
@@ -299,6 +425,8 @@ pub async fn sftp_download(
         files_done: 0,
         files_total: 0,
         speed_bps: 0,
+        total_bytes_all: 0,
+        bytes_transferred_all: 0,
         status: if cancelled { "cancelled" } else { "done" }.to_string(),
     });
 
@@ -317,6 +445,8 @@ async fn download_single_file(
     transfer_id: &str,
     file_index: u32,
     files_total: u32,
+    total_bytes_all: u64,
+    bytes_done_before: u64,
     cancel_flag: &Arc<AtomicBool>,
     app: &AppHandle,
 ) -> Result<(), String> {
@@ -341,6 +471,8 @@ async fn download_single_file(
         files_done: file_index,
         files_total,
         speed_bps: 0,
+        total_bytes_all,
+        bytes_transferred_all: bytes_done_before,
         status: "downloading".to_string(),
     });
 
@@ -387,6 +519,8 @@ async fn download_single_file(
             files_done: file_index,
             files_total,
             speed_bps: speed,
+            total_bytes_all,
+            bytes_transferred_all: bytes_done_before + bytes_downloaded,
             status: "downloading".to_string(),
         });
     }
@@ -414,26 +548,32 @@ async fn download_dir_recursive(
         files_done: 0,
         files_total: 0,
         speed_bps: 0,
+        total_bytes_all: 0,
+        bytes_transferred_all: 0,
         status: "preparing".to_string(),
     });
 
-    let mut files: Vec<(String, String)> = Vec::new();
-    collect_remote_files(session_id, remote_dir, &local_root, &mut files, app).await?;
+    let mut files: Vec<(String, String, u64)> = Vec::new();
+    collect_remote_files_with_sizes(session_id, remote_dir, &local_root, &mut files, app).await?;
 
     let files_total = files.len() as u32;
-    for (i, (rpath, ldir)) in files.iter().enumerate() {
+    let total_bytes_all: u64 = files.iter().map(|(_, _, size)| size).sum();
+
+    let mut bytes_done_before: u64 = 0;
+    for (i, (rpath, ldir, file_size)) in files.iter().enumerate() {
         let fname = rpath.rsplit('/').next().unwrap_or("file").to_string();
-        download_single_file(session_id, rpath, ldir, &fname, transfer_id, i as u32, files_total, cancel_flag, app).await?;
+        download_single_file(session_id, rpath, ldir, &fname, transfer_id, i as u32, files_total, total_bytes_all, bytes_done_before, cancel_flag, app).await?;
+        bytes_done_before += file_size;
     }
 
     Ok(())
 }
 
-async fn collect_remote_files(
+async fn collect_remote_files_with_sizes(
     session_id: u32,
     remote_dir: &str,
     local_dir: &str,
-    files: &mut Vec<(String, String)>,
+    files: &mut Vec<(String, String, u64)>,
     app: &AppHandle,
 ) -> Result<(), String> {
     let entries = {
@@ -459,12 +599,13 @@ async fn collect_remote_files(
             tokio::fs::create_dir_all(&subdir).await.map_err(map_local_error)?;
             subdirs.push((remote_path, subdir));
         } else {
-            files.push((remote_path, local_dir.to_string()));
+            let size = entry.metadata().size.unwrap_or(0);
+            files.push((remote_path, local_dir.to_string(), size));
         }
     }
 
     for (rdir, ldir) in subdirs {
-        Box::pin(collect_remote_files(session_id, &rdir, &ldir, files, app)).await?;
+        Box::pin(collect_remote_files_with_sizes(session_id, &rdir, &ldir, files, app)).await?;
     }
 
     Ok(())
@@ -476,10 +617,32 @@ pub async fn local_copy(
     dest_names: Option<Vec<String>>,
     dest_dir: String,
     app: AppHandle,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let transfer_id = format!("cp-{}", chrono::Utc::now().timestamp_millis());
     info!(count = src_paths.len(), dest = %dest_dir, "Starting local copy");
-    let files_total = src_paths.len() as u32;
+
+    let cancel_flag = Arc::new(AtomicBool::new(false));
+    {
+        let sftp_state = app.state::<SftpState>();
+        let mut transfers = sftp_state.active_transfers.lock().await;
+        transfers.insert(transfer_id.clone(), cancel_flag.clone());
+    }
+
+    let _ = app.emit("transfer-progress", TransferProgress {
+        transfer_id: transfer_id.clone(),
+        file_name: "".to_string(),
+        bytes_transferred: 0,
+        total_bytes: 0,
+        files_done: 0,
+        files_total: 0,
+        speed_bps: 0,
+        total_bytes_all: 0,
+        bytes_transferred_all: 0,
+        status: "preparing".to_string(),
+    });
+
+    let mut all_files: Vec<(std::path::PathBuf, std::path::PathBuf, u64)> = Vec::new();
+    let mut dirs_to_create: Vec<std::path::PathBuf> = Vec::new();
 
     for (i, src) in src_paths.iter().enumerate() {
         let src_path = std::path::Path::new(src);
@@ -490,53 +653,134 @@ pub async fn local_copy(
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| "unknown".to_string())
             });
-        let dest_path = format!("{}/{}", dest_dir.trim_end_matches('/'), file_name);
+        let dest_path = std::path::Path::new(&dest_dir).join(&file_name);
+
+        if src_path.is_dir() {
+            collect_local_copy_files(src_path, &dest_path, &mut all_files, &mut dirs_to_create).await?;
+        } else {
+            let meta = tokio::fs::metadata(src_path).await.map_err(map_local_error)?;
+            all_files.push((src_path.to_path_buf(), dest_path, meta.len()));
+        }
+    }
+
+    let files_total = all_files.len() as u32;
+    let total_bytes_all: u64 = all_files.iter().map(|(_, _, s)| s).sum();
+
+    for dir in &dirs_to_create {
+        tokio::fs::create_dir_all(dir).await.map_err(map_local_error)?;
+    }
+
+    let start = std::time::Instant::now();
+    let mut bytes_done_before: u64 = 0;
+
+    for (i, (src, dest, file_size)) in all_files.iter().enumerate() {
+        if cancel_flag.load(Ordering::Relaxed) {
+            break;
+        }
+
+        let file_name = src.file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "file".to_string());
 
         let _ = app.emit("transfer-progress", TransferProgress {
             transfer_id: transfer_id.clone(),
             file_name: file_name.clone(),
             bytes_transferred: 0,
-            total_bytes: 0,
+            total_bytes: *file_size,
             files_done: i as u32,
             files_total,
             speed_bps: 0,
+            total_bytes_all,
+            bytes_transferred_all: bytes_done_before,
             status: "copying".to_string(),
         });
 
-        if src_path.is_dir() {
-            copy_dir_recursive(src_path, std::path::Path::new(&dest_path)).await?;
-        } else {
-            tokio::fs::copy(src, &dest_path).await.map_err(map_local_error)?;
+        let mut src_file = tokio::fs::File::open(src).await.map_err(map_local_error)?;
+        let mut dest_file = tokio::fs::File::create(dest).await.map_err(map_local_error)?;
+
+        let mut bytes_transferred: u64 = 0;
+        let mut buf = vec![0u8; CHUNK_SIZE];
+
+        loop {
+            if cancel_flag.load(Ordering::Relaxed) {
+                break;
+            }
+
+            use tokio::io::AsyncReadExt;
+            let n = src_file.read(&mut buf).await.map_err(map_local_error)?;
+            if n == 0 { break; }
+
+            use tokio::io::AsyncWriteExt;
+            dest_file.write_all(&buf[..n]).await.map_err(map_local_error)?;
+
+            bytes_transferred += n as u64;
+            let elapsed = start.elapsed().as_secs_f64().max(0.001);
+            let speed = ((bytes_done_before + bytes_transferred) as f64 / elapsed) as u64;
+
+            let _ = app.emit("transfer-progress", TransferProgress {
+                transfer_id: transfer_id.clone(),
+                file_name: file_name.clone(),
+                bytes_transferred,
+                total_bytes: *file_size,
+                files_done: i as u32,
+                files_total,
+                speed_bps: speed,
+                total_bytes_all,
+                bytes_transferred_all: bytes_done_before + bytes_transferred,
+                status: "copying".to_string(),
+            });
         }
+
+        bytes_done_before += file_size;
+    }
+
+    {
+        let sftp_state = app.state::<SftpState>();
+        let mut transfers = sftp_state.active_transfers.lock().await;
+        transfers.remove(&transfer_id);
     }
 
     let _ = app.emit("transfer-progress", TransferProgress {
-        transfer_id,
+        transfer_id: transfer_id.clone(),
         file_name: "".to_string(),
         bytes_transferred: 0,
         total_bytes: 0,
         files_done: files_total,
         files_total,
         speed_bps: 0,
-        status: "done".to_string(),
+        total_bytes_all,
+        bytes_transferred_all: total_bytes_all,
+        status: if cancel_flag.load(Ordering::Relaxed) { "cancelled" } else { "done" }.to_string(),
     });
 
-    Ok(())
+    Ok(transfer_id)
 }
 
-async fn copy_dir_recursive(src: &std::path::Path, dest: &std::path::Path) -> Result<(), String> {
-    tokio::fs::create_dir_all(dest).await.map_err(map_local_error)?;
+async fn collect_local_copy_files(
+    src: &std::path::Path,
+    dest: &std::path::Path,
+    files: &mut Vec<(std::path::PathBuf, std::path::PathBuf, u64)>,
+    dirs: &mut Vec<std::path::PathBuf>,
+) -> Result<(), String> {
+    dirs.push(dest.to_path_buf());
 
     let mut dir = tokio::fs::read_dir(src).await.map_err(map_local_error)?;
+    let mut subdirs = Vec::new();
+
     while let Some(entry) = dir.next_entry().await.map_err(map_local_error)? {
         let src_child = entry.path();
         let dest_child = dest.join(entry.file_name());
 
         if src_child.is_dir() {
-            Box::pin(copy_dir_recursive(&src_child, &dest_child)).await?;
+            subdirs.push((src_child, dest_child));
         } else {
-            tokio::fs::copy(&src_child, &dest_child).await.map_err(map_local_error)?;
+            let meta = entry.metadata().await.map_err(map_local_error)?;
+            files.push((src_child, dest_child, meta.len()));
         }
+    }
+
+    for (s, d) in subdirs {
+        Box::pin(collect_local_copy_files(&s, &d, files, dirs)).await?;
     }
 
     Ok(())
@@ -581,6 +825,8 @@ pub async fn sftp_cross_transfer(
         files_done: 0,
         files_total: 0,
         speed_bps: 0,
+        total_bytes_all: 0,
+        bytes_transferred_all: 0,
         status: if cancel_flag.load(Ordering::Relaxed) { "cancelled" } else { "done" }.to_string(),
     });
 
@@ -623,6 +869,20 @@ async fn sftp_cross_transfer_inner(
     }
 
     let files_total = all_files.len() as u32;
+
+    let mut total_bytes_all: u64 = 0;
+    for (src, _, is_dir_entry) in &all_files {
+        if *is_dir_entry { continue; }
+        let src_arc = get_session(app, src_session_id).await?;
+        let sftp = src_arc.lock().await;
+        if let Ok(stat) = timeout(SFTP_STAT_TIMEOUT, sftp.metadata(src)).await {
+            if let Ok(stat) = stat {
+                total_bytes_all += stat.len();
+            }
+        }
+    }
+
+    let mut bytes_done_before: u64 = 0;
 
     for (i, (src, dest, is_dir_entry)) in all_files.iter().enumerate() {
         if cancel_flag.load(Ordering::Relaxed) {
@@ -680,6 +940,8 @@ async fn sftp_cross_transfer_inner(
             files_done: i as u32,
             files_total,
             speed_bps: 0,
+            total_bytes_all,
+            bytes_transferred_all: bytes_done_before,
             status: "transferring".to_string(),
         });
 
@@ -724,6 +986,8 @@ async fn sftp_cross_transfer_inner(
                 files_done: i as u32,
                 files_total,
                 speed_bps: speed,
+                total_bytes_all,
+                bytes_transferred_all: bytes_done_before + bytes_transferred,
                 status: "transferring".to_string(),
             });
         }
@@ -739,6 +1003,8 @@ async fn sftp_cross_transfer_inner(
             let _ = timeout(SFTP_OP_TIMEOUT, sftp.remove_file(dest.as_str())).await;
             return Err(err);
         }
+
+        bytes_done_before += total_bytes;
     }
 
     Ok(())

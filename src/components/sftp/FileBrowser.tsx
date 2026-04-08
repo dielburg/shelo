@@ -281,11 +281,7 @@ export default function FileBrowser({ pane }: Props) {
       if (isRemote && sshSessionId !== null) {
         await invoke("sftp_upload_paths", { sessionId: sshSessionId, paths: resolvedFiles.map(f => f.path), destNames: buildDestNames(resolvedFiles), remoteDir: currentPath });
       } else {
-        for (const f of resolvedFiles) {
-          const dest = joinPath(currentPath, f.name);
-          const data = await invoke<number[]>("local_read_file", { path: f.path });
-          await invoke("local_write_file", { path: dest, data });
-        }
+        await invoke("local_copy", { srcPaths: resolvedFiles.map(f => f.path), destNames: buildDestNames(resolvedFiles), destDir: currentPath });
         await listDir(currentPath);
       }
     } catch (e) { setError(String(e)); }

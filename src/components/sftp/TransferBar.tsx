@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { TransferProgress } from "./types";
-import { formatSize } from "./utils";
+import { formatSize, formatEta } from "./utils";
 
 interface Props {
   transfer: TransferProgress;
@@ -69,6 +69,13 @@ export default function TransferBar({ transfer }: Props) {
             {transfer.files_total > 1 && `${transfer.files_done + 1}/${transfer.files_total} files · `}
             {formatSize(transfer.bytes_transferred)} / {formatSize(transfer.total_bytes)}
             {transfer.speed_bps > 0 && ` · ${formatSize(transfer.speed_bps)}/s`}
+            {(() => {
+              const remaining = transfer.total_bytes_all > 0
+                ? transfer.total_bytes_all - transfer.bytes_transferred_all
+                : transfer.total_bytes - transfer.bytes_transferred;
+              const eta = formatEta(remaining, transfer.speed_bps);
+              return eta ? ` · ${eta} left` : null;
+            })()}
           </span>
           <button
             onClick={() => invoke("sftp_cancel_transfer", { transferId: transfer.transfer_id })}
@@ -89,7 +96,9 @@ export default function TransferBar({ transfer }: Props) {
             : transfer.status === "transferring" ? "#f59e0b"
             : transfer.status === "copying" ? "#a78bfa"
             : "#4ecdc4",
-          width: transfer.total_bytes > 0 ? `${(transfer.bytes_transferred / transfer.total_bytes) * 100}%` : "0%",
+          width: transfer.total_bytes_all > 0
+            ? `${(transfer.bytes_transferred_all / transfer.total_bytes_all) * 100}%`
+            : transfer.total_bytes > 0 ? `${(transfer.bytes_transferred / transfer.total_bytes) * 100}%` : "0%",
           transition: "width 0.2s",
         }} />
       </div>

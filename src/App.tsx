@@ -5,6 +5,7 @@ import { useWorkspace, genPaneId, genTabId } from "./hooks/useWorkspace";
 import { useTabDrag } from "./hooks/useTabDrag";
 import { usePaneDrag } from "./hooks/usePaneDrag";
 import { useSeparatorDrag } from "./hooks/useSeparatorDrag";
+import { useShortcuts } from "./hooks/useShortcuts";
 import Sidebar, { View } from "./components/Sidebar";
 import WorkspacePanel from "./components/WorkspacePanel";
 import HostsPanel, { Host } from "./components/HostsPanel";
@@ -30,6 +31,9 @@ export default function App() {
   const tabDrag = useTabDrag(workspace, { mainPanelRef, paneRefs, tabItemRefs });
   const paneDrag = usePaneDrag(workspace, { mainPanelRef, sidebarRef, paneRefs, tabItemRefs });
   const sepDrag = useSeparatorDrag(workspace, mainPanelRef);
+
+  const onViewChange = useCallback((view: View) => setActiveView(view), []);
+  const shortcuts = useShortcuts(workspace, onViewChange, activeView);
 
   const checkVaultStatus = useCallback(async () => {
     try {
@@ -69,8 +73,6 @@ export default function App() {
     });
     return () => { unlisten.then(fn => fn()); };
   }, [workspace.dispatch]);
-
-  const onViewChange = useCallback((view: View) => setActiveView(view), []);
 
   const onConnectHost = useCallback((host: Host) => {
     workspace.dispatch({
@@ -174,13 +176,14 @@ export default function App() {
           mainPanelRef={mainPanelRef}
           paneRefs={paneRefs}
           onOpenSftp={onOpenSftp}
+          shortcuts={shortcuts}
         />
       </div>
       <div style={{ flex: 1, display: activeView === "hosts" ? "flex" : "none", flexDirection: "column", overflow: "hidden" }}>
         <HostsPanel onConnect={onConnectHost} />
       </div>
       <div style={{ flex: 1, display: activeView === "settings" ? "flex" : "none", flexDirection: "column", overflow: "hidden" }}>
-        <SettingsPanel updateInfo={updateInfo} onUpdateChecked={setUpdateInfo} />
+        <SettingsPanel updateInfo={updateInfo} onUpdateChecked={setUpdateInfo} shortcuts={shortcuts} />
       </div>
     </div>
   );

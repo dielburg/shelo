@@ -3,6 +3,8 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { readText } from "@tauri-apps/plugin-clipboard-manager";
+import { KeyBinding, matchesBinding } from "../lib/shortcuts";
 import ConnectionScreen, { ConnectionStage } from "./ConnectionScreen";
 import "@xterm/xterm/css/xterm.css";
 
@@ -12,6 +14,7 @@ interface Props {
   kind: "terminal" | "ssh";
   hostId?: number;
   onClose?: () => void;
+  terminalBindings?: { copy: KeyBinding; paste: KeyBinding; selectAll: KeyBinding };
 }
 
 interface PtyOutput {
@@ -30,13 +33,27 @@ interface SshStatusEvent {
   hop_label?: string;
 }
 
-export default function TerminalPane({ sessionId, isFocused, kind, hostId, onClose }: Props) {
+export default function TerminalPane({ sessionId, isFocused, kind, hostId, onClose, terminalBindings }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const [sshConnected, setSshConnected] = useState(kind !== "ssh");
   const [sshDisconnected, setSshDisconnected] = useState(false);
   const [sshStages, setSshStages] = useState<ConnectionStage[]>([]);
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showToast = useCallback((msg: string) => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    setToast(msg);
+    toastTimer.current = setTimeout(() => setToast(null), 1500);
+  }, []);
+
+  const showToastRef = useRef(showToast);
+  showToastRef.current = showToast;
+
+  const bindingsRef = useRef(terminalBindings);
+  bindingsRef.current = terminalBindings;
 
   const startConnection = useCallback(() => {
     setSshStages([]);
@@ -142,18 +159,37 @@ export default function TerminalPane({ sessionId, isFocused, kind, hostId, onClo
       }, 150);
     }
 
-    if (!navigator.platform.toUpperCase().includes("MAC")) {
-      term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
-        if (e.ctrlKey && e.shiftKey && e.key === "C" && e.type === "keydown") {
-          const sel = term.getSelection();
-          if (sel) {
-            navigator.clipboard.writeText(sel).catch(console.error);
-          }
-          return false;
+    term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
+      if (e.type !== "keydown") return true;
+      const b = bindingsRef.current;
+      if (!b) return true;
+
+      if (matchesBinding(e, b.copy)) {
+        e.preventDefault();
+        const sel = term.getSelection();
+        if (sel) {
+          navigator.clipboard.writeText(sel).catch(console.error);
+          showToastRef.current("Copied");
         }
-        return true;
-      });
-    }
+        return false;
+      }
+      if (matchesBinding(e, b.paste)) {
+        e.preventDefault();
+        readText().then(text => {
+          if (text) {
+            invoke(writeCmd, { sessionId, data: text }).catch(console.error);
+            showToastRef.current("Pasted");
+          }
+        }).catch(console.error);
+        return false;
+      }
+      if (matchesBinding(e, b.selectAll)) {
+        e.preventDefault();
+        term.selectAll();
+        return false;
+      }
+      return true;
+    });
 
     term.onData((data) => {
       invoke(writeCmd, { sessionId, data }).catch(console.error);
@@ -245,6 +281,15 @@ export default function TerminalPane({ sessionId, isFocused, kind, hostId, onClo
           position: sshConnected ? "relative" : (kind === "ssh" ? "absolute" : "relative"),
         }}
       />
+      {toast && (
+        <div style={{
+          position: "absolute", bottom: 12, right: 12,
+          background: "rgba(30, 35, 48, 0.9)", color: "#e2e8f0",
+          fontSize: 11, padding: "4px 10px", borderRadius: 4,
+          pointerEvents: "none", zIndex: 10,
+          animation: "toast-fade 1.5s ease-in-out",
+        }}>{toast}</div>
+      )}
       {kind === "ssh" && (!sshConnected || sshDisconnected) && (
         <div style={{ position: "absolute", inset: 0, background: sshDisconnected ? "rgba(11, 13, 18, 0.85)" : undefined }}>
           <ConnectionScreen

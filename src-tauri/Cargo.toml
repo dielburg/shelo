@@ -1,6 +1,6 @@
 [package]
 name = "shelo"
-version = "0.1.2"
+version = "0.2.0"
 description = ""
 authors = ["dielburg"]
 edition = "2021"
@@ -41,4 +41,5 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing-appender = "0.2"
 tauri-plugin-process = "2"
 tauri-plugin-updater = "2"
+tauri-plugin-clipboard-manager = "2"
 

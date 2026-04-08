@@ -4,6 +4,7 @@ import { WorkspaceAPI, genPaneId, genTabId } from "../hooks/useWorkspace";
 import { TabDragAPI } from "../hooks/useTabDrag";
 import { PaneDragAPI } from "../hooks/usePaneDrag";
 import { SeparatorDragAPI } from "../hooks/useSeparatorDrag";
+import { ShortcutsAPI } from "../hooks/useShortcuts";
 import { IconTerminalLarge } from "./icons";
 import PaneContainer from "./PaneContainer";
 import SeparatorHandle from "./SeparatorHandle";
@@ -17,13 +18,20 @@ interface Props {
   mainPanelRef: React.RefObject<HTMLDivElement | null>;
   paneRefs: React.MutableRefObject<Map<number, HTMLDivElement>>;
   onOpenSftp?: (paneId: number) => void;
+  shortcuts?: ShortcutsAPI;
 }
 
-export default function WorkspacePanel({ workspace, tabDrag, paneDrag, sepDrag, mainPanelRef, paneRefs, onOpenSftp }: Props) {
+export default function WorkspacePanel({ workspace, tabDrag, paneDrag, sepDrag, mainPanelRef, paneRefs, onOpenSftp, shortcuts }: Props) {
   const { state, activePaneIds, boundsMap, separators, dispatch } = workspace;
   const { tabs, activeTabId, focusedPaneId } = state;
 
   const blockPointer = sepDrag.isDragging || paneDrag.isActive || tabDrag.splitMode;
+
+  const terminalBindings = shortcuts ? {
+    copy: shortcuts.bindings.terminalCopy,
+    paste: shortcuts.bindings.terminalPaste,
+    selectAll: shortcuts.bindings.terminalSelectAll,
+  } : undefined;
 
   const onFocus = useCallback(
     (pid: number) => dispatch({ type: "FOCUS_PANE", paneId: pid }),
@@ -80,6 +88,7 @@ export default function WorkspacePanel({ workspace, tabDrag, paneDrag, sepDrag, 
                 onSplit={onSplit}
                 onClose={onClosePane}
                 onOpenSftp={onOpenSftp}
+                terminalBindings={terminalBindings}
                 paneRef={el => {
                   if (el) paneRefs.current.set(pid, el);
                   else paneRefs.current.delete(pid);

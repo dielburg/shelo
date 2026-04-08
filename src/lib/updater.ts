@@ -54,16 +54,18 @@ export async function downloadAndInstall(
   }
 
   let downloaded = 0;
+  let total: number | null = null;
 
   await _pendingUpdate.downloadAndInstall((event) => {
     switch (event.event) {
       case "Started":
         downloaded = 0;
-        onProgress?.({ downloaded: 0, total: event.data.contentLength ?? null });
+        total = event.data.contentLength ?? null;
+        onProgress?.({ downloaded: 0, total });
         break;
       case "Progress":
         downloaded += event.data.chunkLength;
-        onProgress?.({ downloaded, total: null });
+        onProgress?.({ downloaded, total });
         break;
       case "Finished":
         onProgress?.({ downloaded, total: downloaded });

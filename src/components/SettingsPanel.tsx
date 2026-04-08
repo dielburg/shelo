@@ -11,8 +11,10 @@ import {
   DownloadProgress,
   UpdateInfo,
 } from "../lib/updater";
+import { ShortcutsAPI } from "../hooks/useShortcuts";
+import ShortcutsSettings from "./ShortcutsSettings";
 
-type Category = "general" | "vault";
+type Category = "general" | "vault" | "shortcuts";
 
 interface VaultInfo {
   status: string;
@@ -21,9 +23,10 @@ interface VaultInfo {
 interface Props {
   updateInfo: UpdateInfo | null;
   onUpdateChecked?: (info: UpdateInfo | null) => void;
+  shortcuts?: ShortcutsAPI;
 }
 
-export default function SettingsPanel({ updateInfo, onUpdateChecked }: Props) {
+export default function SettingsPanel({ updateInfo, onUpdateChecked, shortcuts }: Props) {
   const [category, setCategory] = useState<Category>("general");
 
   return (
@@ -58,6 +61,11 @@ export default function SettingsPanel({ updateInfo, onUpdateChecked }: Props) {
           active={category === "vault"}
           onClick={() => setCategory("vault")}
         />
+        <CategoryButton
+          label="Shortcuts"
+          active={category === "shortcuts"}
+          onClick={() => setCategory("shortcuts")}
+        />
       </div>
 
       <div style={{ flex: 1, overflow: "auto", padding: "20px 28px" }}>
@@ -65,6 +73,9 @@ export default function SettingsPanel({ updateInfo, onUpdateChecked }: Props) {
           <GeneralSettings updateInfo={updateInfo} onUpdateChecked={onUpdateChecked} />
         )}
         {category === "vault" && <VaultSettings />}
+        {category === "shortcuts" && shortcuts && (
+          <ShortcutsSettings shortcuts={shortcuts} />
+        )}
       </div>
       </div>
     </div>

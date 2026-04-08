@@ -34,5 +34,7 @@ pub struct TransferProgress {
     pub files_done: u32,
     pub files_total: u32,
     pub speed_bps: u64,
+    pub total_bytes_all: u64,
+    pub bytes_transferred_all: u64,
     pub status: String,
 }

@@ -1,5 +1,6 @@
 mod hosts;
 mod pty;
+mod settings;
 mod sftp;
 mod ssh;
 
@@ -36,6 +37,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
             let data_dir = app
                 .path()
@@ -49,6 +51,7 @@ pub fn run() {
             app.manage(pty::PtyState::new());
             app.manage(ssh::SshState::new(data_dir.clone()));
             app.manage(sftp::SftpState::new());
+            app.manage(settings::SettingsState::new(data_dir.clone()));
 
             let hosts_state = hosts::HostsState::new(data_dir);
 
@@ -118,6 +121,8 @@ pub fn run() {
             sftp::transfer::local_copy,
             sftp::transfer::sftp_cross_transfer,
             sftp::transfer::sftp_cancel_transfer,
+            settings::get_settings,
+            settings::set_settings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

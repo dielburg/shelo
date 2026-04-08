@@ -14,6 +14,8 @@
     "dialog:default",
     "core:event:default",
     "process:default",
-    "updater:default"
+    "updater:default",
+    "clipboard-manager:default",
+    "clipboard-manager:allow-read-text"
   ]
 }

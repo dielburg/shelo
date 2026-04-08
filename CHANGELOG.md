@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.2.0
+
+Configurable keyboard shortcuts, transfer progress improvements, and quality-of-life fixes.
+
+### Features
+
+- Configurable keyboard shortcuts with per-OS defaults (macOS / Windows / Linux)
+- Shortcuts settings panel with rebinding, conflict detection, and reset to defaults
+- ETA and speed display for all SFTP transfer types (upload, download, cross-transfer, local copy)
+- Cumulative progress tracking for multi-file transfers
+- Copy/paste toast notification in terminal
+- Streaming local file copy with progress bar and cancel support
+
+### Bug Fixes
+
+- Fix update download progress bar stuck at 50% instead of advancing
+- Fix system drag & drop (e.g. from Finder) loading entire files into memory
+- Fix clipboard paste on Windows showing browser permission prompt (uses Tauri clipboard plugin)
+- Fix double paste when using CMD+V on macOS
+- Fix native tooltip not displaying on info icons in settings
+
 ## v0.1.2
 
 ### Bug Fixes

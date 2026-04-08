@@ -6,6 +6,8 @@ export interface TransferProgress {
   files_done: number;
   files_total: number;
   speed_bps: number;
+  total_bytes_all: number;
+  bytes_transferred_all: number;
   status: string;
 }
 

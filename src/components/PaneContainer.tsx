@@ -1,5 +1,6 @@
 import { Pane, DropZone } from "../types";
 import { Bounds } from "../layoutTree";
+import { KeyBinding } from "../lib/shortcuts";
 import { IconSplitH, IconSplitV, IconSftp } from "./icons";
 import DropOverlay from "./DropOverlay";
 import TerminalPane from "./TerminalPane";
@@ -21,6 +22,7 @@ interface Props {
   onClose: (paneId: number) => void;
   onOpenSftp?: (paneId: number) => void;
   paneRef: (el: HTMLDivElement | null) => void;
+  terminalBindings?: { copy: KeyBinding; paste: KeyBinding; selectAll: KeyBinding };
 }
 
 const btnStyle: React.CSSProperties = {
@@ -31,7 +33,7 @@ const btnStyle: React.CSSProperties = {
 
 export default function PaneContainer({
   pane, bounds, isVisible, isFocused, showFocusOutline, isDragSource,
-  dropZone, blockPointer, canDrag, onFocus, onHeaderMouseDown, onSplit, onClose, onOpenSftp, paneRef,
+  dropZone, blockPointer, canDrag, onFocus, onHeaderMouseDown, onSplit, onClose, onOpenSftp, paneRef, terminalBindings,
 }: Props) {
   return (
     <div
@@ -89,7 +91,7 @@ export default function PaneContainer({
       <div style={{ flex: 1, overflow: "hidden", pointerEvents: blockPointer ? "none" : "auto", position: "relative" }}>
         {pane.kind === "sftp"
           ? <FileBrowser pane={pane} />
-          : <TerminalPane sessionId={pane.sessionId} isFocused={isFocused} kind={pane.kind} hostId={pane.hostId} onClose={() => onClose(pane.id)} />
+          : <TerminalPane sessionId={pane.sessionId} isFocused={isFocused} kind={pane.kind} hostId={pane.hostId} onClose={() => onClose(pane.id)} terminalBindings={terminalBindings} />
         }
         <DropOverlay zone={dropZone} />
       </div>
