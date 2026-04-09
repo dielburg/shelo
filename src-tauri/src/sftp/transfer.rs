@@ -101,10 +101,15 @@ async fn upload_single_file(
         .map_err(|_| timeout_msg("Create remote file"))?
         .map_err(map_sftp_error)?;
 
+    drop(sftp);
+
     let mut local_file = tokio::fs::File::open(local_path).await.map_err(map_local_error)?;
     let mut buf = vec![0u8; CHUNK_SIZE];
-    let start = std::time::Instant::now();
     let mut bytes_written: u64 = 0;
+    let mut last_emit = std::time::Instant::now();
+    let mut window_start = std::time::Instant::now();
+    let mut window_bytes: u64 = 0;
+    let mut speed: u64 = 0;
 
     loop {
         if cancel_flag.load(Ordering::Relaxed) {
@@ -122,23 +127,46 @@ async fn upload_single_file(
             .map_err(|e| format!("Write error: {}", e))?;
 
         bytes_written += n as u64;
+        window_bytes += n as u64;
 
-        let elapsed = start.elapsed().as_secs_f64().max(0.001);
-        let speed = (bytes_written as f64 / elapsed) as u64;
+        let window_elapsed = window_start.elapsed().as_secs_f64();
+        if window_elapsed >= 3.0 {
+            speed = (window_bytes as f64 / window_elapsed) as u64;
+            window_start = std::time::Instant::now();
+            window_bytes = 0;
+        } else if window_elapsed > 0.001 {
+            speed = (window_bytes as f64 / window_elapsed) as u64;
+        }
 
-        let _ = app.emit("transfer-progress", TransferProgress {
-            transfer_id: transfer_id.to_string(),
-            file_name: file_name.to_string(),
-            bytes_transferred: bytes_written,
-            total_bytes,
-            files_done: file_index,
-            files_total,
-            speed_bps: speed,
-            total_bytes_all,
-            bytes_transferred_all: bytes_done_before + bytes_written,
-            status: "uploading".to_string(),
-        });
+        if last_emit.elapsed().as_millis() >= 150 {
+            last_emit = std::time::Instant::now();
+            let _ = app.emit("transfer-progress", TransferProgress {
+                transfer_id: transfer_id.to_string(),
+                file_name: file_name.to_string(),
+                bytes_transferred: bytes_written,
+                total_bytes,
+                files_done: file_index,
+                files_total,
+                speed_bps: speed,
+                total_bytes_all,
+                bytes_transferred_all: bytes_done_before + bytes_written,
+                status: "uploading".to_string(),
+            });
+        }
     }
+
+    let _ = app.emit("transfer-progress", TransferProgress {
+        transfer_id: transfer_id.to_string(),
+        file_name: file_name.to_string(),
+        bytes_transferred: bytes_written,
+        total_bytes,
+        files_done: file_index,
+        files_total,
+        speed_bps: speed,
+        total_bytes_all,
+        bytes_transferred_all: bytes_done_before + bytes_written,
+        status: "uploading".to_string(),
+    });
 
     use tokio::io::AsyncWriteExt;
     let _ = timeout(SFTP_OP_TIMEOUT, remote_file.shutdown()).await;
@@ -476,8 +504,6 @@ async fn download_single_file(
         status: "downloading".to_string(),
     });
 
-    let start = std::time::Instant::now();
-
     let mut remote_file = timeout(SFTP_OP_TIMEOUT, sftp.open(remote_path))
         .await
         .map_err(|_| timeout_msg("Open remote file"))?
@@ -489,6 +515,10 @@ async fn download_single_file(
     let mut local_file = tokio::fs::File::create(&local_path).await.map_err(map_local_error)?;
     let mut buf = vec![0u8; CHUNK_SIZE];
     let mut bytes_downloaded: u64 = 0;
+    let mut last_emit = std::time::Instant::now();
+    let mut window_start = std::time::Instant::now();
+    let mut window_bytes: u64 = 0;
+    let mut speed: u64 = 0;
 
     loop {
         if cancel_flag.load(Ordering::Relaxed) {
@@ -507,23 +537,46 @@ async fn download_single_file(
         local_file.write_all(&buf[..n]).await.map_err(map_local_error)?;
 
         bytes_downloaded += n as u64;
+        window_bytes += n as u64;
 
-        let elapsed = start.elapsed().as_secs_f64().max(0.001);
-        let speed = (bytes_downloaded as f64 / elapsed) as u64;
+        let window_elapsed = window_start.elapsed().as_secs_f64();
+        if window_elapsed >= 3.0 {
+            speed = (window_bytes as f64 / window_elapsed) as u64;
+            window_start = std::time::Instant::now();
+            window_bytes = 0;
+        } else if window_elapsed > 0.001 {
+            speed = (window_bytes as f64 / window_elapsed) as u64;
+        }
 
-        let _ = app.emit("transfer-progress", TransferProgress {
-            transfer_id: transfer_id.to_string(),
-            file_name: file_name.to_string(),
-            bytes_transferred: bytes_downloaded,
-            total_bytes,
-            files_done: file_index,
-            files_total,
-            speed_bps: speed,
-            total_bytes_all,
-            bytes_transferred_all: bytes_done_before + bytes_downloaded,
-            status: "downloading".to_string(),
-        });
+        if last_emit.elapsed().as_millis() >= 150 {
+            last_emit = std::time::Instant::now();
+            let _ = app.emit("transfer-progress", TransferProgress {
+                transfer_id: transfer_id.to_string(),
+                file_name: file_name.to_string(),
+                bytes_transferred: bytes_downloaded,
+                total_bytes,
+                files_done: file_index,
+                files_total,
+                speed_bps: speed,
+                total_bytes_all,
+                bytes_transferred_all: bytes_done_before + bytes_downloaded,
+                status: "downloading".to_string(),
+            });
+        }
     }
+
+    let _ = app.emit("transfer-progress", TransferProgress {
+        transfer_id: transfer_id.to_string(),
+        file_name: file_name.to_string(),
+        bytes_transferred: bytes_downloaded,
+        total_bytes,
+        files_done: file_index,
+        files_total,
+        speed_bps: speed,
+        total_bytes_all,
+        bytes_transferred_all: bytes_done_before + bytes_downloaded,
+        status: "downloading".to_string(),
+    });
 
     Ok(())
 }
@@ -670,7 +723,6 @@ pub async fn local_copy(
         tokio::fs::create_dir_all(dir).await.map_err(map_local_error)?;
     }
 
-    let start = std::time::Instant::now();
     let mut bytes_done_before: u64 = 0;
 
     for (i, (src, dest, file_size)) in all_files.iter().enumerate() {
@@ -700,6 +752,10 @@ pub async fn local_copy(
 
         let mut bytes_transferred: u64 = 0;
         let mut buf = vec![0u8; CHUNK_SIZE];
+        let mut last_emit = std::time::Instant::now();
+        let mut window_start = std::time::Instant::now();
+        let mut window_bytes: u64 = 0;
+        let mut speed: u64 = 0;
 
         loop {
             if cancel_flag.load(Ordering::Relaxed) {
@@ -714,22 +770,46 @@ pub async fn local_copy(
             dest_file.write_all(&buf[..n]).await.map_err(map_local_error)?;
 
             bytes_transferred += n as u64;
-            let elapsed = start.elapsed().as_secs_f64().max(0.001);
-            let speed = ((bytes_done_before + bytes_transferred) as f64 / elapsed) as u64;
+            window_bytes += n as u64;
 
-            let _ = app.emit("transfer-progress", TransferProgress {
-                transfer_id: transfer_id.clone(),
-                file_name: file_name.clone(),
-                bytes_transferred,
-                total_bytes: *file_size,
-                files_done: i as u32,
-                files_total,
-                speed_bps: speed,
-                total_bytes_all,
-                bytes_transferred_all: bytes_done_before + bytes_transferred,
-                status: "copying".to_string(),
-            });
+            let window_elapsed = window_start.elapsed().as_secs_f64();
+            if window_elapsed >= 3.0 {
+                speed = (window_bytes as f64 / window_elapsed) as u64;
+                window_start = std::time::Instant::now();
+                window_bytes = 0;
+            } else if window_elapsed > 0.001 {
+                speed = (window_bytes as f64 / window_elapsed) as u64;
+            }
+
+            if last_emit.elapsed().as_millis() >= 150 {
+                last_emit = std::time::Instant::now();
+                let _ = app.emit("transfer-progress", TransferProgress {
+                    transfer_id: transfer_id.clone(),
+                    file_name: file_name.clone(),
+                    bytes_transferred,
+                    total_bytes: *file_size,
+                    files_done: i as u32,
+                    files_total,
+                    speed_bps: speed,
+                    total_bytes_all,
+                    bytes_transferred_all: bytes_done_before + bytes_transferred,
+                    status: "copying".to_string(),
+                });
+            }
         }
+
+        let _ = app.emit("transfer-progress", TransferProgress {
+            transfer_id: transfer_id.clone(),
+            file_name: file_name.clone(),
+            bytes_transferred,
+            total_bytes: *file_size,
+            files_done: i as u32,
+            files_total,
+            speed_bps: speed,
+            total_bytes_all,
+            bytes_transferred_all: bytes_done_before + bytes_transferred,
+            status: "copying".to_string(),
+        });
 
         bytes_done_before += file_size;
     }
@@ -945,10 +1025,13 @@ async fn sftp_cross_transfer_inner(
             status: "transferring".to_string(),
         });
 
-        let start = std::time::Instant::now();
         let mut bytes_transferred: u64 = 0;
         let mut buf = vec![0u8; CHUNK_SIZE];
         let mut stream_error: Option<String> = None;
+        let mut last_emit = std::time::Instant::now();
+        let mut window_start = std::time::Instant::now();
+        let mut window_bytes: u64 = 0;
+        let mut speed: u64 = 0;
 
         loop {
             if cancel_flag.load(Ordering::Relaxed) {
@@ -975,22 +1058,46 @@ async fn sftp_cross_transfer_inner(
             }
 
             bytes_transferred += n as u64;
-            let elapsed = start.elapsed().as_secs_f64().max(0.001);
-            let speed = (bytes_transferred as f64 / elapsed) as u64;
+            window_bytes += n as u64;
 
-            let _ = app.emit("transfer-progress", TransferProgress {
-                transfer_id: transfer_id.to_string(),
-                file_name: file_name.clone(),
-                bytes_transferred,
-                total_bytes,
-                files_done: i as u32,
-                files_total,
-                speed_bps: speed,
-                total_bytes_all,
-                bytes_transferred_all: bytes_done_before + bytes_transferred,
-                status: "transferring".to_string(),
-            });
+            let window_elapsed = window_start.elapsed().as_secs_f64();
+            if window_elapsed >= 3.0 {
+                speed = (window_bytes as f64 / window_elapsed) as u64;
+                window_start = std::time::Instant::now();
+                window_bytes = 0;
+            } else if window_elapsed > 0.001 {
+                speed = (window_bytes as f64 / window_elapsed) as u64;
+            }
+
+            if last_emit.elapsed().as_millis() >= 150 {
+                last_emit = std::time::Instant::now();
+                let _ = app.emit("transfer-progress", TransferProgress {
+                    transfer_id: transfer_id.to_string(),
+                    file_name: file_name.clone(),
+                    bytes_transferred,
+                    total_bytes,
+                    files_done: i as u32,
+                    files_total,
+                    speed_bps: speed,
+                    total_bytes_all,
+                    bytes_transferred_all: bytes_done_before + bytes_transferred,
+                    status: "transferring".to_string(),
+                });
+            }
         }
+
+        let _ = app.emit("transfer-progress", TransferProgress {
+            transfer_id: transfer_id.to_string(),
+            file_name: file_name.clone(),
+            bytes_transferred,
+            total_bytes,
+            files_done: i as u32,
+            files_total,
+            speed_bps: speed,
+            total_bytes_all,
+            bytes_transferred_all: bytes_done_before + bytes_transferred,
+            status: "transferring".to_string(),
+        });
 
         use tokio::io::AsyncWriteExt;
         let _ = timeout(SFTP_OP_TIMEOUT, dest_file.shutdown()).await;

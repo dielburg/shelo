@@ -11,6 +11,7 @@ import "@xterm/xterm/css/xterm.css";
 interface Props {
   sessionId: number;
   isFocused: boolean;
+  isVisible: boolean;
   kind: "terminal" | "ssh";
   hostId?: number;
   onClose?: () => void;
@@ -33,7 +34,7 @@ interface SshStatusEvent {
   hop_label?: string;
 }
 
-export default function TerminalPane({ sessionId, isFocused, kind, hostId, onClose, terminalBindings }: Props) {
+export default function TerminalPane({ sessionId, isFocused, isVisible, kind, hostId, onClose, terminalBindings }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -231,6 +232,7 @@ export default function TerminalPane({ sessionId, isFocused, kind, hostId, onClo
 
     const ro = new ResizeObserver(() => {
       if (!fitAddonRef.current || !termRef.current) return;
+      if (!containerRef.current || containerRef.current.offsetParent === null) return;
       try {
         fitAddonRef.current.fit();
         invoke(resizeCmd, {
@@ -266,6 +268,20 @@ export default function TerminalPane({ sessionId, isFocused, kind, hostId, onClo
       });
     }
   }, [isFocused, sessionId, kind]);
+
+  useEffect(() => {
+    if (isVisible && fitAddonRef.current && termRef.current) {
+      const resizeCmd = kind === "ssh" ? "resize_ssh" : "resize_pty";
+      requestAnimationFrame(() => {
+        try { fitAddonRef.current?.fit(); } catch {}
+        invoke(resizeCmd, {
+          sessionId,
+          rows: termRef.current?.rows,
+          cols: termRef.current?.cols,
+        }).catch(console.error);
+      });
+    }
+  }, [isVisible, sessionId, kind]);
 
   return (
     <div style={{ width: "100%", height: "100%", position: "relative" }}>

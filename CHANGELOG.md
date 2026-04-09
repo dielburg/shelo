@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.2.1
+
+Under the hood tune-up — faster transfers, smoother tabs.
+
+### Performance
+
+- Increase SFTP transfer buffer from 32KB to 256KB
+- Throttle transfer progress events to ~7/s instead of ~84/s, reducing CPU usage and IPC overhead during transfers
+- Replace cumulative average speed calculation with 3-second rolling window for accurate real-time speed display
+- Release SFTP session lock before upload transfer loop, unblocking concurrent SFTP operations during uploads
+
+### Bug Fixes
+
+- Fix terminal content loss when switching tabs — last line of output no longer disappears
+- Fix terminal flicker on tab switch caused by xterm.js `fit()` firing on hidden containers
+- Fix progress output (rsync, wget, etc.) garbling into stacked lines when switching tabs during active transfers
+
 ## v0.2.0
 
 Configurable keyboard shortcuts, transfer progress improvements, and quality-of-life fixes.

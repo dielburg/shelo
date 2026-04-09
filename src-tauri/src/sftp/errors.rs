@@ -5,7 +5,7 @@ pub const SFTP_OP_TIMEOUT: Duration = Duration::from_secs(15);
 pub const SFTP_TRANSFER_TIMEOUT: Duration = Duration::from_secs(30);
 pub const SFTP_STAT_TIMEOUT: Duration = Duration::from_secs(10);
 pub const SFTP_SESSION_TIMEOUT_SECS: u64 = 15;
-pub const CHUNK_SIZE: usize = 32768;
+pub const CHUNK_SIZE: usize = 262144;
 
 pub fn map_sftp_error(e: russh_sftp::client::error::Error) -> String {
     use russh_sftp::client::error::Error;

@@ -91,7 +91,7 @@ export default function PaneContainer({
       <div style={{ flex: 1, overflow: "hidden", pointerEvents: blockPointer ? "none" : "auto", position: "relative" }}>
         {pane.kind === "sftp"
           ? <FileBrowser pane={pane} />
-          : <TerminalPane sessionId={pane.sessionId} isFocused={isFocused} kind={pane.kind} hostId={pane.hostId} onClose={() => onClose(pane.id)} terminalBindings={terminalBindings} />
+          : <TerminalPane sessionId={pane.sessionId} isFocused={isFocused} isVisible={isVisible} kind={pane.kind} hostId={pane.hostId} onClose={() => onClose(pane.id)} terminalBindings={terminalBindings} />
         }
         <DropOverlay zone={dropZone} />
       </div>
