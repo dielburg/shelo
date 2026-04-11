@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.2.3
+
+Terminal zoom, auto-reconnect for SSH sessions, and host password reveal.
+
+### Features
+
+- Per-panel terminal zoom — Cmd/Ctrl + scroll, Cmd/Ctrl +/-, or click the percentage in the toolbar to type a value (50%–200%)
+- Auto-reconnect for SSH sessions — 5-second countdown after disconnect with configurable retry limit (Settings → Connection)
+- Auto-reconnect toggle directly on the disconnect screen for quick access
+- Default terminal font size setting (Settings → Terminal)
+- Zoom In, Zoom Out, and Zoom Reset added as configurable keyboard shortcuts
+
+### Improvements
+
+- Reveal stored password when editing a host instead of requiring re-entry
+
 ## v0.2.2
 
 Terminal paste fix, SFTP improvements, and vault UI polish.

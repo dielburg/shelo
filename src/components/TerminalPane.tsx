@@ -16,6 +16,12 @@ interface Props {
   hostId?: number;
   onClose?: () => void;
   terminalBindings?: { copy: KeyBinding; paste: KeyBinding; selectAll: KeyBinding };
+  fontSize?: number;
+  zoom?: number;
+  onZoomIn?: () => void;
+  onZoomOut?: () => void;
+  onZoomReset?: () => void;
+  onZoomChange?: (zoom: number) => void;
 }
 
 interface PtyOutput {
@@ -34,7 +40,7 @@ interface SshStatusEvent {
   hop_label?: string;
 }
 
-export default function TerminalPane({ sessionId, isFocused, isVisible, kind, hostId, onClose, terminalBindings }: Props) {
+export default function TerminalPane({ sessionId, isFocused, isVisible, kind, hostId, onClose, terminalBindings, fontSize = 13, zoom = 100, onZoomIn, onZoomOut, onZoomReset, onZoomChange }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -45,6 +51,13 @@ export default function TerminalPane({ sessionId, isFocused, isVisible, kind, ho
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const [autoReconnect, setAutoReconnect] = useState(false);
+  const [reconnectRetryLimit, setReconnectRetryLimit] = useState(3);
+  const [countdown, setCountdown] = useState<number | null>(null);
+  const [retryAttempt, setRetryAttempt] = useState(0);
+  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const settingsLoaded = useRef(false);
+
   const showToast = useCallback((msg: string) => {
     if (toastTimer.current) clearTimeout(toastTimer.current);
     setToast(msg);
@@ -54,8 +67,55 @@ export default function TerminalPane({ sessionId, isFocused, isVisible, kind, ho
   const showToastRef = useRef(showToast);
   showToastRef.current = showToast;
 
+  useEffect(() => {
+    if (settingsLoaded.current) return;
+    settingsLoaded.current = true;
+    invoke("get_settings").then((s: unknown) => {
+      const settings = s as Record<string, unknown>;
+      if (typeof settings.autoReconnect === "boolean") setAutoReconnect(settings.autoReconnect);
+      if (typeof settings.reconnectRetryLimit === "number") setReconnectRetryLimit(settings.reconnectRetryLimit);
+    }).catch(console.error);
+  }, []);
+
+  const clearCountdown = useCallback(() => {
+    if (countdownRef.current) {
+      clearInterval(countdownRef.current);
+      countdownRef.current = null;
+    }
+    setCountdown(null);
+  }, []);
+
+  const handleAutoReconnectChange = useCallback(async (enabled: boolean) => {
+    setAutoReconnect(enabled);
+    try {
+      const s = await invoke("get_settings") as Record<string, unknown>;
+      await invoke("set_settings", { settings: { ...s, autoReconnect: enabled } });
+    } catch (e) {
+      console.error("Failed to save settings:", e);
+    }
+    if (!enabled) {
+      clearCountdown();
+    }
+  }, [clearCountdown]);
+
+  const handleCancelCountdown = useCallback(() => {
+    clearCountdown();
+    setRetryAttempt(0);
+  }, [clearCountdown]);
+
   const bindingsRef = useRef(terminalBindings);
   bindingsRef.current = terminalBindings;
+
+  const zoomInRef = useRef(onZoomIn);
+  zoomInRef.current = onZoomIn;
+  const zoomOutRef = useRef(onZoomOut);
+  zoomOutRef.current = onZoomOut;
+  const zoomResetRef = useRef(onZoomReset);
+  zoomResetRef.current = onZoomReset;
+  const zoomChangeRef = useRef(onZoomChange);
+  zoomChangeRef.current = onZoomChange;
+  const zoomRef = useRef(zoom);
+  zoomRef.current = zoom;
 
   const handleCtxCopy = useCallback(() => {
     const term = termRef.current;
@@ -112,17 +172,57 @@ export default function TerminalPane({ sessionId, isFocused, isVisible, kind, ho
   }, [sessionId, hostId]);
 
   const handleReconnect = useCallback(() => {
+    clearCountdown();
     const term = termRef.current;
     if (term) {
       term.clear();
     }
     startConnection();
-  }, [startConnection]);
+  }, [startConnection, clearCountdown]);
 
   const handleClose = useCallback(() => {
+    clearCountdown();
     invoke("close_ssh_session", { sessionId }).catch(console.error);
     onClose?.();
-  }, [sessionId, onClose]);
+  }, [sessionId, onClose, clearCountdown]);
+
+  useEffect(() => {
+    if (!sshDisconnected || !autoReconnect) return;
+    if (reconnectRetryLimit > 0 && retryAttempt >= reconnectRetryLimit) return;
+
+    const attempt = retryAttempt + 1;
+    setRetryAttempt(attempt);
+    setCountdown(5);
+
+    const interval = setInterval(() => {
+      setCountdown(prev => {
+        if (prev === null || prev <= 1) {
+          clearInterval(interval);
+          countdownRef.current = null;
+          const term = termRef.current;
+          if (term) term.clear();
+          startConnection();
+          return null;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    countdownRef.current = interval;
+
+    return () => {
+      clearInterval(interval);
+      if (countdownRef.current === interval) {
+        countdownRef.current = null;
+      }
+    };
+  }, [sshDisconnected]);
+
+  useEffect(() => {
+    if (sshConnected && !sshDisconnected) {
+      setRetryAttempt(0);
+    }
+  }, [sshConnected, sshDisconnected]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -153,7 +253,7 @@ export default function TerminalPane({ sessionId, isFocused, isVisible, kind, ho
       fontFamily: "'JetBrainsMono Nerd Font', 'JetBrains Mono', monospace",
       fontWeight: 400,
       fontWeightBold: 700,
-      fontSize: 13,
+      fontSize,
       lineHeight: 1.5,
       cursorBlink: true,
       cursorStyle: "block",
@@ -219,6 +319,26 @@ export default function TerminalPane({ sessionId, isFocused, isVisible, kind, ho
         term.selectAll();
         return false;
       }
+
+      const modKey = navigator.platform.includes("Mac") ? e.metaKey : e.ctrlKey;
+      const noOtherMods = navigator.platform.includes("Mac") ? !e.ctrlKey && !e.altKey : !e.metaKey && !e.altKey;
+      if (modKey && !e.shiftKey && noOtherMods) {
+        if (e.key === "=" || e.key === "+") {
+          e.preventDefault();
+          zoomInRef.current?.();
+          return false;
+        }
+        if (e.key === "-") {
+          e.preventDefault();
+          zoomOutRef.current?.();
+          return false;
+        }
+        if (e.key === "0") {
+          e.preventDefault();
+          zoomResetRef.current?.();
+          return false;
+        }
+      }
       return true;
     });
 
@@ -274,15 +394,47 @@ export default function TerminalPane({ sessionId, isFocused, isVisible, kind, ho
     });
     ro.observe(containerRef.current);
 
+    const wheelHandler = (e: WheelEvent) => {
+      const modKey = navigator.platform.includes("Mac") ? e.metaKey : e.ctrlKey;
+      if (!modKey) return;
+      e.preventDefault();
+      if (e.deltaY < 0) {
+        zoomInRef.current?.();
+      } else if (e.deltaY > 0) {
+        zoomOutRef.current?.();
+      }
+    };
+    containerRef.current.addEventListener("wheel", wheelHandler, { passive: false });
+
     return () => {
       if (initTimer) clearTimeout(initTimer);
+      if (countdownRef.current) clearInterval(countdownRef.current);
       unlistenOutput.then(fn => fn());
       unlistenSshStatus?.then(fn => fn());
+      containerRef.current?.removeEventListener("wheel", wheelHandler);
       ro.disconnect();
       invoke(closeCmd, { sessionId }).catch(console.error);
       term.dispose();
     };
   }, [sessionId, kind, hostId, startConnection]);
+
+  useEffect(() => {
+    const term = termRef.current;
+    const fitAddon = fitAddonRef.current;
+    if (!term || !fitAddon) return;
+    if (term.options.fontSize === fontSize) return;
+
+    term.options.fontSize = fontSize;
+    const resizeCmd = kind === "ssh" ? "resize_ssh" : "resize_pty";
+    requestAnimationFrame(() => {
+      try { fitAddon.fit(); } catch {}
+      invoke(resizeCmd, {
+        sessionId,
+        rows: term.rows,
+        cols: term.cols,
+      }).catch(console.error);
+    });
+  }, [fontSize, sessionId, kind]);
 
   useEffect(() => {
     if (isFocused && fitAddonRef.current && termRef.current) {
@@ -380,6 +532,12 @@ export default function TerminalPane({ sessionId, isFocused, isVisible, kind, ho
             stages={sshDisconnected ? sshStages.filter(s => s.stage === "disconnected") : sshStages}
             onClose={handleClose}
             onReconnect={handleReconnect}
+            autoReconnect={autoReconnect}
+            onAutoReconnectChange={handleAutoReconnectChange}
+            countdown={countdown}
+            retryAttempt={retryAttempt}
+            retryLimit={reconnectRetryLimit === 0 ? 0 : reconnectRetryLimit}
+            onCancelCountdown={handleCancelCountdown}
           />
         </div>
       )}

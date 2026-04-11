@@ -127,6 +127,7 @@ pub fn run() {
             hosts::migrate_to_encrypted,
             hosts::change_master_password,
             hosts::get_hosts,
+            hosts::get_host_password,
             hosts::save_host,
             hosts::delete_host,
             hosts::export_vault,

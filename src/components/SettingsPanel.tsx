@@ -14,7 +14,7 @@ import {
 import { ShortcutsAPI } from "../hooks/useShortcuts";
 import ShortcutsSettings from "./ShortcutsSettings";
 
-type Category = "general" | "vault" | "shortcuts";
+type Category = "general" | "terminal" | "connection" | "vault" | "shortcuts";
 
 interface VaultInfo {
   status: string;
@@ -57,6 +57,16 @@ export default function SettingsPanel({ updateInfo, onUpdateChecked, shortcuts }
           onClick={() => setCategory("general")}
         />
         <CategoryButton
+          label="Terminal"
+          active={category === "terminal"}
+          onClick={() => setCategory("terminal")}
+        />
+        <CategoryButton
+          label="Connection"
+          active={category === "connection"}
+          onClick={() => setCategory("connection")}
+        />
+        <CategoryButton
           label="Vault"
           active={category === "vault"}
           onClick={() => setCategory("vault")}
@@ -72,6 +82,8 @@ export default function SettingsPanel({ updateInfo, onUpdateChecked, shortcuts }
         {category === "general" && (
           <GeneralSettings updateInfo={updateInfo} onUpdateChecked={onUpdateChecked} />
         )}
+        {category === "terminal" && <TerminalSettings />}
+        {category === "connection" && <ConnectionSettings />}
         {category === "vault" && <VaultSettings />}
         {category === "shortcuts" && shortcuts && (
           <ShortcutsSettings shortcuts={shortcuts} />
@@ -331,6 +343,163 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function TerminalSettings() {
+  const [defaultFontSize, setDefaultFontSize] = useState(13);
+  const [loaded, setLoaded] = useState(false);
+
+  useState(() => {
+    invoke("get_settings").then((s: unknown) => {
+      const settings = s as Record<string, unknown>;
+      if (typeof settings.defaultTerminalFontSize === "number") setDefaultFontSize(settings.defaultTerminalFontSize);
+      setLoaded(true);
+    }).catch(() => setLoaded(true));
+  });
+
+  const persist = useCallback(async (patch: Record<string, unknown>) => {
+    try {
+      const s = await invoke("get_settings") as Record<string, unknown>;
+      await invoke("set_settings", { settings: { ...s, ...patch } });
+    } catch (e) {
+      console.error("Failed to save settings:", e);
+    }
+  }, []);
+
+  const handleFontSizeChange = useCallback((value: string) => {
+    const num = parseInt(value);
+    if (isNaN(num) || num < 7 || num > 28) return;
+    setDefaultFontSize(num);
+    persist({ defaultTerminalFontSize: num });
+  }, [persist]);
+
+  if (!loaded) return null;
+
+  return (
+    <div style={{ maxWidth: 480 }}>
+      <div style={{ fontSize: 16, fontWeight: 700, color: "#e2e8f0", marginBottom: 4 }}>
+        Terminal
+      </div>
+      <div style={{ fontSize: 12, color: "#475569", marginBottom: 20 }}>
+        Default terminal appearance settings.
+      </div>
+
+      <SettingsRow
+        label="Default font size"
+        description="Base font size for new terminal sessions. Zoom adjusts relative to this value."
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <input
+            type="number"
+            min={7}
+            max={28}
+            value={defaultFontSize}
+            onChange={e => handleFontSizeChange(e.target.value)}
+            style={{
+              width: 70, padding: "6px 10px", borderRadius: 6,
+              border: "1px solid #1e2330", background: "#0d1017",
+              color: "#e2e8f0", fontSize: 12, fontFamily: "inherit",
+              outline: "none", textAlign: "center",
+              MozAppearance: "textfield",
+              appearance: "textfield",
+            } as React.CSSProperties}
+          />
+          <span style={{ fontSize: 11, color: "#475569" }}>
+            {defaultFontSize}px
+          </span>
+        </div>
+      </SettingsRow>
+    </div>
+  );
+}
+
+function ConnectionSettings() {
+  const [autoReconnect, setAutoReconnect] = useState(false);
+  const [retryLimit, setRetryLimit] = useState(3);
+  const [loaded, setLoaded] = useState(false);
+
+  useState(() => {
+    invoke("get_settings").then((s: unknown) => {
+      const settings = s as Record<string, unknown>;
+      if (typeof settings.autoReconnect === "boolean") setAutoReconnect(settings.autoReconnect);
+      if (typeof settings.reconnectRetryLimit === "number") setRetryLimit(settings.reconnectRetryLimit);
+      setLoaded(true);
+    }).catch(() => setLoaded(true));
+  });
+
+  const persist = useCallback(async (patch: Record<string, unknown>) => {
+    try {
+      const s = await invoke("get_settings") as Record<string, unknown>;
+      await invoke("set_settings", { settings: { ...s, ...patch } });
+    } catch (e) {
+      console.error("Failed to save settings:", e);
+    }
+  }, []);
+
+  const handleToggleAutoReconnect = useCallback((enabled: boolean) => {
+    setAutoReconnect(enabled);
+    persist({ autoReconnect: enabled });
+  }, [persist]);
+
+  const handleRetryLimitChange = useCallback((value: string) => {
+    const num = parseInt(value);
+    if (isNaN(num) || num < 0) return;
+    setRetryLimit(num);
+    persist({ reconnectRetryLimit: num });
+  }, [persist]);
+
+  if (!loaded) return null;
+
+  return (
+    <div style={{ maxWidth: 480 }}>
+      <div style={{ fontSize: 16, fontWeight: 700, color: "#e2e8f0", marginBottom: 4 }}>
+        Connection
+      </div>
+      <div style={{ fontSize: 12, color: "#475569", marginBottom: 20 }}>
+        SSH connection behavior and reconnection preferences.
+      </div>
+
+      <SettingsRow
+        label="Auto-reconnect"
+        description="Automatically reconnect to SSH hosts after disconnection."
+      >
+        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+          <input
+            type="checkbox"
+            checked={autoReconnect}
+            onChange={e => handleToggleAutoReconnect(e.target.checked)}
+            style={{ accentColor: "#667eea", width: 14, height: 14 }}
+          />
+          <span style={{ fontSize: 12, color: "#cbd5e1" }}>Enable auto-reconnect</span>
+        </label>
+      </SettingsRow>
+
+      <SettingsRow
+        label="Retry limit"
+        description="Maximum number of reconnection attempts. Set to 0 for unlimited retries."
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <input
+            type="number"
+            min={0}
+            value={retryLimit}
+            onChange={e => handleRetryLimitChange(e.target.value)}
+            style={{
+              width: 70, padding: "6px 10px", borderRadius: 6,
+              border: "1px solid #1e2330", background: "#0d1017",
+              color: "#e2e8f0", fontSize: 12, fontFamily: "inherit",
+              outline: "none", textAlign: "center",
+              MozAppearance: "textfield",
+              appearance: "textfield",
+            } as React.CSSProperties}
+          />
+          <span style={{ fontSize: 11, color: "#475569" }}>
+            {retryLimit === 0 ? "Unlimited" : `${retryLimit} attempt${retryLimit !== 1 ? "s" : ""}`}
+          </span>
+        </div>
+      </SettingsRow>
+    </div>
+  );
 }
 
 function VaultSettings() {

@@ -15,6 +15,12 @@ interface Props {
   stages: ConnectionStage[];
   onClose: () => void;
   onReconnect: () => void;
+  autoReconnect?: boolean;
+  onAutoReconnectChange?: (enabled: boolean) => void;
+  countdown?: number | null;
+  retryAttempt?: number;
+  retryLimit?: number;
+  onCancelCountdown?: () => void;
 }
 
 const terminalStages = ["connecting", "handshake", "host_verified", "authenticating", "channel", "connected", "hop_connected"];
@@ -36,7 +42,7 @@ function stageColor(stage: string, isLatest: boolean): string {
   return "#4ecdc4";
 }
 
-export default function ConnectionScreen({ sessionId, stages, onClose, onReconnect }: Props) {
+export default function ConnectionScreen({ sessionId, stages, onClose, onReconnect, autoReconnect, onAutoReconnectChange, countdown, retryAttempt, retryLimit, onCancelCountdown }: Props) {
   const latest = stages[stages.length - 1];
   const isError = latest?.stage === "error";
   const isDisconnected = latest?.stage === "disconnected";
@@ -221,13 +227,73 @@ export default function ConnectionScreen({ sessionId, stages, onClose, onReconne
       )}
 
       {(isError || isDisconnected) && (
-        <div style={{ marginTop: 24, display: "flex", gap: 10 }}>
-          <button onClick={onReconnect} style={{ ...btnBase, background: "#667eea", color: "#fff" }}>
-            Reconnect
-          </button>
-          <button onClick={onClose} style={{ ...btnBase, background: "#3a4560", color: "#e2e8f0" }}>
-            Close
-          </button>
+        <div style={{ marginTop: 24, display: "flex", flexDirection: "column", gap: 12 }}>
+          {(isDisconnected || isError) && onAutoReconnectChange && (
+            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+              <label
+                onClick={(e) => { e.preventDefault(); onAutoReconnectChange!(!autoReconnect); }}
+                style={{
+                  display: "flex", alignItems: "center", gap: 8, cursor: "pointer",
+                  userSelect: "none", WebkitUserSelect: "none",
+                }}
+              >
+                <span style={{
+                  fontSize: 11, fontWeight: 500,
+                  color: autoReconnect ? "#8b9df0" : "#4a5568",
+                  transition: "color 0.2s ease",
+                }}>
+                  Auto-reconnect
+                </span>
+                <div style={{
+                  width: 28, height: 14, borderRadius: 7,
+                  background: autoReconnect ? "#667eea" : "#2a3050",
+                  position: "relative", transition: "background 0.2s ease",
+                  flexShrink: 0,
+                }}>
+                  <div style={{
+                    width: 10, height: 10, borderRadius: "50%",
+                    background: autoReconnect ? "#fff" : "#4a5568",
+                    position: "absolute", top: 2,
+                    left: autoReconnect ? 16 : 2,
+                    transition: "left 0.2s ease, background 0.2s ease",
+                  }} />
+                </div>
+              </label>
+            </div>
+          )}
+
+          {countdown != null && countdown > 0 ? (
+            <>
+              <div style={{ fontSize: 13, color: "#8892b0", textAlign: "center" }}>
+                Reconnecting in <span style={{ color: "#667eea", fontWeight: 700 }}>{countdown}</span>s...
+                {retryAttempt != null && (
+                  <span style={{ color: "#475569", fontSize: 11, marginLeft: 8 }}>
+                    attempt {retryAttempt}{retryLimit ? `/${retryLimit}` : ""}
+                  </span>
+                )}
+              </div>
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+                <button onClick={onReconnect} style={{ ...btnBase, background: "#667eea", color: "#fff" }}>
+                  Reconnect now
+                </button>
+                <button onClick={onCancelCountdown} style={{ ...btnBase, background: "#3a4560", color: "#e2e8f0" }}>
+                  Cancel
+                </button>
+                <button onClick={onClose} style={{ ...btnBase, background: "#3a4560", color: "#e2e8f0" }}>
+                  Close
+                </button>
+              </div>
+            </>
+          ) : (
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+              <button onClick={onReconnect} style={{ ...btnBase, background: "#667eea", color: "#fff" }}>
+                Reconnect
+              </button>
+              <button onClick={onClose} style={{ ...btnBase, background: "#3a4560", color: "#e2e8f0" }}>
+                Close
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

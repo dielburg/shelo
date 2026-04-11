@@ -308,6 +308,16 @@ pub async fn get_hosts(app: AppHandle) -> Result<Vec<HostDto>, String> {
 }
 
 #[tauri::command]
+pub async fn get_host_password(id: u32, app: AppHandle) -> Result<Option<String>, String> {
+    let state = app.state::<HostsState>();
+    let store = state.store.lock().await;
+    let s = require_store(&store)?;
+    let entries = s.list()?;
+    let password = entries.iter().find(|h| h.id == id).and_then(|h| h.password.clone());
+    Ok(password)
+}
+
+#[tauri::command]
 pub async fn save_host(payload: HostPayload, app: AppHandle) -> Result<HostDto, String> {
     let state = app.state::<HostsState>();
     let store = state.store.lock().await;

@@ -13,7 +13,10 @@ export type ShortcutAction =
   | "jumpToTab9"
   | "terminalCopy"
   | "terminalPaste"
-  | "terminalSelectAll";
+  | "terminalSelectAll"
+  | "terminalZoomIn"
+  | "terminalZoomOut"
+  | "terminalZoomReset";
 
 export type ShortcutContext = "global" | "terminal";
 
@@ -48,6 +51,9 @@ export const SHORTCUT_METAS: ShortcutMeta[] = [
   { action: "terminalCopy", label: "Copy", description: "Copy selected text from the terminal to clipboard", context: "terminal" },
   { action: "terminalPaste", label: "Paste", description: "Paste text from clipboard into the terminal", context: "terminal" },
   { action: "terminalSelectAll", label: "Select All", description: "Select all text in the terminal buffer", context: "terminal" },
+  { action: "terminalZoomIn", label: "Zoom In", description: "Increase terminal font size", context: "terminal" },
+  { action: "terminalZoomOut", label: "Zoom Out", description: "Decrease terminal font size", context: "terminal" },
+  { action: "terminalZoomReset", label: "Zoom Reset", description: "Reset terminal font size to default", context: "terminal" },
 ];
 
 function macDefaults(): Record<ShortcutAction, KeyBinding> {
@@ -68,6 +74,9 @@ function macDefaults(): Record<ShortcutAction, KeyBinding> {
     terminalCopy: cmd("c"),
     terminalPaste: cmd("v"),
     terminalSelectAll: cmd("a"),
+    terminalZoomIn: cmd("="),
+    terminalZoomOut: cmd("-"),
+    terminalZoomReset: cmd("0"),
   };
 }
 
@@ -90,6 +99,9 @@ function winLinuxDefaults(): Record<ShortcutAction, KeyBinding> {
     terminalCopy: ctrlShift("c"),
     terminalPaste: ctrlShift("v"),
     terminalSelectAll: ctrlShift("a"),
+    terminalZoomIn: ctrl("="),
+    terminalZoomOut: ctrl("-"),
+    terminalZoomReset: ctrl("0"),
   };
 }
 
