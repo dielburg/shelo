@@ -42,6 +42,7 @@ export default function TerminalPane({ sessionId, isFocused, isVisible, kind, ho
   const [sshDisconnected, setSshDisconnected] = useState(false);
   const [sshStages, setSshStages] = useState<ConnectionStage[]>([]);
   const [toast, setToast] = useState<string | null>(null);
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const showToast = useCallback((msg: string) => {
@@ -55,6 +56,35 @@ export default function TerminalPane({ sessionId, isFocused, isVisible, kind, ho
 
   const bindingsRef = useRef(terminalBindings);
   bindingsRef.current = terminalBindings;
+
+  const handleCtxCopy = useCallback(() => {
+    const term = termRef.current;
+    if (!term) return;
+    const sel = term.getSelection();
+    if (sel) {
+      navigator.clipboard.writeText(sel).catch(console.error);
+      showToast("Copied");
+    }
+    setCtxMenu(null);
+  }, [showToast]);
+
+  const handleCtxPaste = useCallback(() => {
+    const term = termRef.current;
+    if (!term) return;
+    readText().then(text => {
+      if (text) {
+        term.paste(text);
+        showToast("Pasted");
+      }
+    }).catch(console.error);
+    setCtxMenu(null);
+  }, [showToast]);
+
+  const handleCtxSelectAll = useCallback(() => {
+    const term = termRef.current;
+    if (term) term.selectAll();
+    setCtxMenu(null);
+  }, []);
 
   const startConnection = useCallback(() => {
     setSshStages([]);
@@ -178,7 +208,7 @@ export default function TerminalPane({ sessionId, isFocused, isVisible, kind, ho
         e.preventDefault();
         readText().then(text => {
           if (text) {
-            invoke(writeCmd, { sessionId, data: text }).catch(console.error);
+            term.paste(text);
             showToastRef.current("Pasted");
           }
         }).catch(console.error);
@@ -288,6 +318,10 @@ export default function TerminalPane({ sessionId, isFocused, isVisible, kind, ho
       {/* Terminal is always mounted but hidden during SSH connection */}
       <div
         ref={containerRef}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setCtxMenu({ x: e.clientX, y: e.clientY });
+        }}
         style={{
           width: "100%",
           height: "100%",
@@ -297,6 +331,39 @@ export default function TerminalPane({ sessionId, isFocused, isVisible, kind, ho
           position: sshConnected ? "relative" : (kind === "ssh" ? "absolute" : "relative"),
         }}
       />
+      {ctxMenu && (<>
+        <div
+          style={{ position: "fixed", inset: 0, zIndex: 9998 }}
+          onClick={() => setCtxMenu(null)}
+          onContextMenu={(e) => { e.preventDefault(); setCtxMenu(null); }}
+        />
+        <div style={{
+          position: "fixed", left: ctxMenu.x, top: ctxMenu.y,
+          background: "#1a1f2e", border: "1px solid #2a3050", borderRadius: 6,
+          padding: "4px 0", zIndex: 9999, minWidth: 160,
+          boxShadow: "0 4px 12px rgba(0,0,0,0.5)",
+        }}>
+          <div
+            onClick={handleCtxCopy}
+            onMouseEnter={e => (e.currentTarget.style.background = "#2a3050")}
+            onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+            style={{ padding: "6px 14px", fontSize: 12, cursor: "pointer", color: "#e2e8f0" }}
+          >Copy</div>
+          <div
+            onClick={handleCtxPaste}
+            onMouseEnter={e => (e.currentTarget.style.background = "#2a3050")}
+            onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+            style={{ padding: "6px 14px", fontSize: 12, cursor: "pointer", color: "#e2e8f0" }}
+          >Paste</div>
+          <div style={{ height: 1, background: "#2a3050", margin: "4px 0" }} />
+          <div
+            onClick={handleCtxSelectAll}
+            onMouseEnter={e => (e.currentTarget.style.background = "#2a3050")}
+            onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+            style={{ padding: "6px 14px", fontSize: 12, cursor: "pointer", color: "#e2e8f0" }}
+          >Select All</div>
+        </div>
+      </>)}
       {toast && (
         <div style={{
           position: "absolute", bottom: 12, right: 12,

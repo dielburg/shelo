@@ -27,6 +27,11 @@ html, body, #root {
   background: #0b0d12;
 }
 
+input::-ms-reveal,
+input::-ms-clear {
+  display: none;
+}
+
 @keyframes toast-fade {
   0% { opacity: 0; transform: translateY(4px); }
   15% { opacity: 1; transform: translateY(0); }

@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.2.2
+
+Terminal paste fix, SFTP improvements, and vault UI polish.
+
+### Features
+
+- Terminal right-click context menu with copy, paste, and select all
+- SFTP path input with folder autocomplete — click breadcrumbs to type a path manually
+- Password visibility toggle (eye icon) on vault setup and unlock screens
+
+### Bug Fixes
+
+- Fix multiline paste in terminal losing formatting (bracketed paste mode)
+- Fix SFTP drag-and-drop from OS file explorer not detecting file conflicts on Windows
+- Fix Windows drive letter (C:/) missing from SFTP breadcrumbs and paths
+- Fix SFTP ".." row showing on Windows drive roots where it had no effect
+- Fix duplicate breadcrumb separator on macOS/Linux root paths
+- Fix Cmd+W closing entire app instead of active tab on macOS
+- Fix global shortcuts (Cmd+T, Cmd+W) firing while typing in input fields
+- Fix clipboard shortcuts (copy, paste, cut, select all) not working in vault password inputs on macOS
+- Hide native password reveal button on Windows to avoid duplicate eye icons
+
 ## v0.2.1
 
 Under the hood tune-up — faster transfers, smoother tabs.

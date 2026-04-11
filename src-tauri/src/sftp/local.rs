@@ -3,7 +3,8 @@ use super::errors::map_local_error;
 
 fn normalize_path(path: String) -> String {
     if cfg!(target_os = "windows") {
-        path.replace('\\', "/")
+        let p = path.replace('\\', "/");
+        p.strip_prefix("//?/").map(|s| s.to_string()).unwrap_or(p)
     } else {
         path
     }
@@ -11,9 +12,13 @@ fn normalize_path(path: String) -> String {
 
 #[tauri::command]
 pub async fn local_list_dir(path: String) -> Result<Vec<FileEntry>, String> {
+    let resolved = std::fs::canonicalize(&path)
+        .map(|p| normalize_path(p.to_string_lossy().to_string()))
+        .unwrap_or_else(|_| normalize_path(path));
+
     let mut entries = Vec::new();
 
-    let mut dir = tokio::fs::read_dir(&path)
+    let mut dir = tokio::fs::read_dir(&resolved)
         .await
         .map_err(map_local_error)?;
 
@@ -69,9 +74,10 @@ pub async fn local_list_dir(path: String) -> Result<Vec<FileEntry>, String> {
 
 #[tauri::command]
 pub async fn local_get_cwd() -> Result<String, String> {
-    std::env::current_dir()
-        .map(|p| normalize_path(p.to_string_lossy().to_string()))
-        .map_err(|e| map_local_error(e))
+    let cwd = std::env::current_dir()
+        .map_err(|e| map_local_error(e))?;
+    let full = std::fs::canonicalize(&cwd).unwrap_or(cwd);
+    Ok(normalize_path(full.to_string_lossy().to_string()))
 }
 
 #[tauri::command]

@@ -52,6 +52,13 @@ export default function FileBrowser({ pane }: Props) {
   const [permValue, setPermValue] = useState("");
   const [isDragOver, setIsDragOver] = useState(false);
   const [isPanelDragOver, setIsPanelDragOver] = useState(false);
+  const [editingPath, setEditingPath] = useState(false);
+  const [pathInputValue, setPathInputValue] = useState("");
+  const [suggestions, setSuggestions] = useState<FileEntry[]>([]);
+  const [selectedSuggestion, setSelectedSuggestion] = useState(-1);
+  const pathInputRef = useRef<HTMLInputElement>(null);
+  const suggestListRef = useRef<HTMLDivElement>(null);
+  const suggestTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const renameRef = useRef<HTMLInputElement>(null);
   const createRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -73,8 +80,17 @@ export default function FileBrowser({ pane }: Props) {
       } else {
         result = await invoke<FileEntry[]>("local_list_dir", { path });
       }
+      let resolvedPath = path;
+      if (result.length > 0) {
+        const ep = result[0].path.replace(/\\/g, "/");
+        const lastSlash = ep.lastIndexOf("/");
+        if (lastSlash >= 0) {
+          const parent = ep.slice(0, lastSlash);
+          resolvedPath = parent.match(/^[A-Za-z]:$/) ? parent + "/" : parent || "/";
+        }
+      }
       setRawEntries(result);
-      setCurrentPath(path);
+      setCurrentPath(resolvedPath);
       setSelectedPaths(new Set());
       setFilter("");
       lastClickedPath.current = null;
@@ -110,7 +126,106 @@ export default function FileBrowser({ pane }: Props) {
     else { setSortKey(key); setSortDir("asc"); }
   }, [sortKey]);
 
-  const navigateTo = useCallback((path: string) => listDir(path), [listDir]);
+  const navigateTo = useCallback((path: string) => { setEditingPath(false); listDir(path); }, [listDir]);
+
+  const startEditingPath = useCallback(() => {
+    setEditingPath(true);
+    setPathInputValue(currentPath);
+    setSuggestions([]);
+    setSelectedSuggestion(-1);
+    requestAnimationFrame(() => pathInputRef.current?.select());
+  }, [currentPath]);
+
+  const fetchSuggestions = useCallback(async (value: string) => {
+    const sep = value.lastIndexOf("/");
+    const sepBack = value.lastIndexOf("\\");
+    const lastSep = Math.max(sep, sepBack);
+    if (lastSep < 0) { setSuggestions([]); return; }
+
+    const dir = value.slice(0, lastSep + 1) || "/";
+    const prefix = value.slice(lastSep + 1).toLowerCase();
+
+    try {
+      let result: FileEntry[];
+      if (isRemote && sshSessionId !== null) {
+        result = await invoke<FileEntry[]>("sftp_list_dir", { sessionId: sshSessionId, path: dir });
+      } else {
+        result = await invoke<FileEntry[]>("local_list_dir", { path: dir });
+      }
+      const dirs = result
+        .filter(e => e.is_dir && e.name.toLowerCase().startsWith(prefix) && (showHidden || !e.name.startsWith(".")));
+      setSuggestions(dirs);
+      setSelectedSuggestion(-1);
+    } catch {
+      setSuggestions([]);
+    }
+  }, [isRemote, sshSessionId, showHidden]);
+
+  const onPathInputChange = useCallback((value: string) => {
+    setPathInputValue(value);
+    if (suggestTimer.current) clearTimeout(suggestTimer.current);
+    suggestTimer.current = setTimeout(() => fetchSuggestions(value), 200);
+  }, [fetchSuggestions]);
+
+  const applySuggestion = useCallback((name: string) => {
+    const value = pathInputValue;
+    const sep = value.lastIndexOf("/");
+    const sepBack = value.lastIndexOf("\\");
+    const lastSep = Math.max(sep, sepBack);
+    const dir = value.slice(0, lastSep + 1);
+    const newPath = dir + name + "/";
+    setPathInputValue(newPath);
+    setSuggestions([]);
+    setSelectedSuggestion(-1);
+    pathInputRef.current?.focus();
+    if (suggestTimer.current) clearTimeout(suggestTimer.current);
+    suggestTimer.current = setTimeout(() => fetchSuggestions(newPath), 200);
+  }, [pathInputValue, fetchSuggestions]);
+
+  const onPathInputKeyDown = useCallback((e: React.KeyboardEvent) => {
+    e.stopPropagation();
+    if (e.key === "Escape") {
+      setEditingPath(false);
+      setSuggestions([]);
+      return;
+    }
+    if (e.key === "Tab") {
+      e.preventDefault();
+      if (suggestions.length > 0) {
+        const idx = selectedSuggestion >= 0 ? selectedSuggestion : 0;
+        applySuggestion(suggestions[idx].name);
+      }
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setSelectedSuggestion(i => {
+        const next = Math.min(i + 1, suggestions.length - 1);
+        requestAnimationFrame(() => suggestListRef.current?.children[next]?.scrollIntoView({ block: "nearest" }));
+        return next;
+      });
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setSelectedSuggestion(i => {
+        const next = Math.max(i - 1, -1);
+        if (next >= 0) requestAnimationFrame(() => suggestListRef.current?.children[next]?.scrollIntoView({ block: "nearest" }));
+        return next;
+      });
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (selectedSuggestion >= 0 && suggestions[selectedSuggestion]) {
+        applySuggestion(suggestions[selectedSuggestion].name);
+      } else {
+        const path = pathInputValue.trim();
+        if (path) navigateTo(path);
+      }
+      return;
+    }
+  }, [suggestions, selectedSuggestion, applySuggestion, pathInputValue, navigateTo]);
 
   const goUp = useCallback(() => {
     if (!currentPath || isRoot(currentPath)) return;
@@ -272,7 +387,10 @@ export default function FileBrowser({ pane }: Props) {
   }, [pane.id, isRemote, sshSessionId, currentPath, listDir, checkConflicts]);
 
   const handleSystemDrop = useCallback(async (paths: string[]) => {
-    const files = paths.map(p => ({ path: p, name: p.split("/").pop() || "file", is_dir: false }));
+    const files = paths.map(p => {
+      const normalized = p.replace(/\\/g, "/").replace(/\/+$/, "");
+      return { path: p, name: normalized.split("/").pop() || "file", is_dir: false };
+    });
     const resolvedFiles = await checkConflicts(files);
     if (resolvedFiles.length === 0) return;
 
@@ -651,21 +769,62 @@ export default function FileBrowser({ pane }: Props) {
         <button onClick={goUp} style={{ ...breadcrumbBtn, opacity: isRoot(currentPath) ? 0.3 : 1 }} disabled={isRoot(currentPath)}>
           ..
         </button>
-        <button onClick={() => navigateTo(root)} style={breadcrumbBtn}>{root}</button>
-        {breadcrumbs.map((part, i) => {
-          const path = root + breadcrumbs.slice(0, i + 1).join("/");
-          return (
-            <span key={path} style={{ display: "flex", alignItems: "center", gap: 4 }}>
-              <span style={{ color: "#3a4560" }}>/</span>
-              <button onClick={() => navigateTo(path)} style={{
-                ...breadcrumbBtn,
-                color: i === breadcrumbs.length - 1 ? "#e2e8f0" : "#94a3b8",
-                fontWeight: i === breadcrumbs.length - 1 ? 500 : 400,
-              }}>{part}</button>
-            </span>
-          );
-        })}
-        <div style={{ flex: 1 }} />
+        {editingPath ? (
+          <div style={{ flex: 1, position: "relative", minWidth: 0 }}>
+            <input
+              ref={pathInputRef}
+              value={pathInputValue}
+              onChange={e => onPathInputChange(e.target.value)}
+              onKeyDown={onPathInputKeyDown}
+              onBlur={() => { setTimeout(() => { setEditingPath(false); setSuggestions([]); }, 150); }}
+              onMouseDown={e => e.stopPropagation()}
+              style={{
+                width: "100%", background: "#0e1018", border: "1px solid #667eea",
+                borderRadius: 4, color: "#e2e8f0", fontSize: 11, padding: "2px 6px",
+                outline: "none", boxSizing: "border-box",
+              }}
+            />
+            {suggestions.length > 0 && (
+              <div ref={suggestListRef} style={{
+                position: "absolute", top: "calc(100% + 2px)", left: 0, right: 0,
+                background: "#1a1f2e", border: "1px solid #2a3050", borderRadius: 4,
+                zIndex: 100, maxHeight: 200, overflowY: "auto",
+                boxShadow: "0 4px 12px rgba(0,0,0,0.5)",
+              }}>
+                {suggestions.map((s, i) => (
+                  <div
+                    key={s.path}
+                    onMouseDown={e => { e.preventDefault(); applySuggestion(s.name); }}
+                    style={{
+                      padding: "4px 8px", fontSize: 11, cursor: "pointer",
+                      color: "#e2e8f0",
+                      background: i === selectedSuggestion ? "#2a3050" : "transparent",
+                    }}
+                    onMouseEnter={e => (e.currentTarget.style.background = "#2a3050")}
+                    onMouseLeave={e => (e.currentTarget.style.background = i === selectedSuggestion ? "#2a3050" : "transparent")}
+                  >📁 {s.name}</div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div onClick={startEditingPath} style={{ display: "flex", alignItems: "center", gap: 0, cursor: "text", minWidth: 0, flex: 1 }}>
+            <button onClick={e => { e.stopPropagation(); navigateTo(root); }} style={breadcrumbBtn}>{root}</button>
+            {breadcrumbs.map((part, i) => {
+              const path = root + breadcrumbs.slice(0, i + 1).join("/");
+              return (
+                <span key={path} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                  {i > 0 && <span style={{ color: "#3a4560" }}>/</span>}
+                  <button onClick={e => { e.stopPropagation(); navigateTo(path); }} style={{
+                    ...breadcrumbBtn,
+                    color: i === breadcrumbs.length - 1 ? "#e2e8f0" : "#94a3b8",
+                    fontWeight: i === breadcrumbs.length - 1 ? 500 : 400,
+                  }}>{part}</button>
+                </span>
+              );
+            })}
+          </div>
+        )}
         <input value={filter} onChange={e => setFilter(e.target.value)}
           onMouseDown={e => e.stopPropagation()}
           onKeyDown={e => { e.stopPropagation(); if (e.key === "Escape") { setFilter(""); (e.target as HTMLInputElement).blur(); } }}
@@ -702,7 +861,7 @@ export default function FileBrowser({ pane }: Props) {
             <button onClick={() => listDir(currentPath)} style={{ ...breadcrumbBtn, color: "#4ecdc4", marginTop: 8 }}>Retry</button>
           </div>
         )}
-        {!loading && !error && currentPath !== "/" && (
+        {!loading && !error && !isRoot(currentPath) && (
           <div style={{ ...rowStyle, cursor: "pointer", color: "#64748b" }} onClick={goUp} onDoubleClick={goUp}
             onMouseEnter={e => { e.currentTarget.style.background = "#0e1018"; }}
             onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}>

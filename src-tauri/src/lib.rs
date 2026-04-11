@@ -5,6 +5,7 @@ mod sftp;
 mod ssh;
 
 use tauri::Manager;
+use tauri::menu::{MenuBuilder, SubmenuBuilder};
 use tracing::info;
 
 #[tauri::command]
@@ -61,6 +62,41 @@ pub fn run() {
             }
 
             app.manage(hosts_state);
+
+            #[cfg(target_os = "macos")]
+            {
+                let app_name = "shelo";
+                let menu = MenuBuilder::new(app)
+                    .item(
+                        &SubmenuBuilder::new(app, app_name)
+                            .about(None)
+                            .separator()
+                            .hide()
+                            .hide_others()
+                            .show_all()
+                            .separator()
+                            .quit()
+                            .build()?,
+                    )
+                    .item(
+                        &SubmenuBuilder::new(app, "Edit")
+                            .undo()
+                            .redo()
+                            .separator()
+                            .cut()
+                            .copy()
+                            .paste()
+                            .select_all()
+                            .build()?,
+                    )
+                    .item(
+                        &SubmenuBuilder::new(app, "Window")
+                            .minimize()
+                            .build()?,
+                    )
+                    .build()?;
+                app.set_menu(menu)?;
+            }
 
             if cfg!(not(target_os = "macos")) {
                 if let Some(window) = app.get_webview_window("main") {

@@ -95,6 +95,10 @@ export function useShortcuts(
       const ws = workspaceRef.current;
       if (!b) return;
 
+      const t = e.target;
+      if (t instanceof HTMLInputElement ||
+          (t instanceof HTMLTextAreaElement && !t.classList.contains("xterm-helper-textarea"))) return;
+
       if (e.key === "Escape" && activeViewRef.current !== "terminals") {
         e.preventDefault();
         onViewChangeRef.current("terminals");
