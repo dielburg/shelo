@@ -35,10 +35,26 @@ impl fmt::Debug for HostEntry {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+pub struct TunnelEntry {
+    pub id: u32,
+    pub label: String,
+    pub host_id: u32,
+    pub tunnel_type: String,
+    pub bind_address: String,
+    pub source_port: u16,
+    pub destination_host: String,
+    pub destination_port: u16,
+}
+
 #[derive(Serialize, Deserialize, Default)]
 pub struct HostsFile {
     pub next_id: u32,
     pub hosts: Vec<HostEntry>,
+    #[serde(default)]
+    pub next_tunnel_id: u32,
+    #[serde(default)]
+    pub tunnels: Vec<TunnelEntry>,
 }
 
 pub struct PlaintextStore {
@@ -249,6 +265,43 @@ impl HostStore {
         file.hosts.retain(|h| h.id != id);
         if file.hosts.len() == before {
             return Err(format!("host {} not found", id));
+        }
+        self.write_file(&file)
+    }
+
+    pub fn list_tunnels(&self) -> Result<Vec<TunnelEntry>, String> {
+        Ok(self.read_file().tunnels)
+    }
+
+    pub fn add_tunnel(&self, mut entry: TunnelEntry) -> Result<TunnelEntry, String> {
+        let mut file = self.read_file();
+        file.next_tunnel_id = file
+            .next_tunnel_id
+            .max(entry.id)
+            .max(file.tunnels.iter().map(|t| t.id).max().unwrap_or(0))
+            + 1;
+        entry.id = file.next_tunnel_id;
+        file.tunnels.push(entry.clone());
+        self.write_file(&file)?;
+        Ok(entry)
+    }
+
+    pub fn update_tunnel(&self, entry: TunnelEntry) -> Result<(), String> {
+        let mut file = self.read_file();
+        if let Some(existing) = file.tunnels.iter_mut().find(|t| t.id == entry.id) {
+            *existing = entry;
+            self.write_file(&file)
+        } else {
+            Err(format!("tunnel {} not found", entry.id))
+        }
+    }
+
+    pub fn delete_tunnel(&self, id: u32) -> Result<(), String> {
+        let mut file = self.read_file();
+        let before = file.tunnels.len();
+        file.tunnels.retain(|t| t.id != id);
+        if file.tunnels.len() == before {
+            return Err(format!("tunnel {} not found", id));
         }
         self.write_file(&file)
     }

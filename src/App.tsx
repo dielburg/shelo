@@ -9,6 +9,7 @@ import { useShortcuts } from "./hooks/useShortcuts";
 import Sidebar, { View } from "./components/Sidebar";
 import WorkspacePanel from "./components/WorkspacePanel";
 import HostsPanel, { Host } from "./components/HostsPanel";
+import TunnelsPanel from "./components/TunnelsPanel";
 import VaultSetup from "./components/VaultSetup";
 import VaultUnlock from "./components/VaultUnlock";
 import SettingsPanel from "./components/SettingsPanel";
@@ -26,13 +27,25 @@ export default function App() {
 
   const [activeView, setActiveView] = useState<View>("terminals");
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [hostsList, setHostsList] = useState<Host[]>([]);
+  const [activeTunnelCount, setActiveTunnelCount] = useState(0);
 
   const workspace = useWorkspace();
   const tabDrag = useTabDrag(workspace, { mainPanelRef, paneRefs, tabItemRefs });
   const paneDrag = usePaneDrag(workspace, { mainPanelRef, sidebarRef, paneRefs, tabItemRefs });
   const sepDrag = useSeparatorDrag(workspace, mainPanelRef);
 
-  const onViewChange = useCallback((view: View) => setActiveView(view), []);
+  const loadHostsList = useCallback(async () => {
+    try {
+      const data = await invoke<Host[]>("get_hosts");
+      setHostsList(data);
+    } catch {}
+  }, []);
+
+  const onViewChange = useCallback((view: View) => {
+    setActiveView(view);
+    if (view === "tunnels") loadHostsList();
+  }, [loadHostsList]);
   const shortcuts = useShortcuts(workspace, onViewChange, activeView);
 
   const checkVaultStatus = useCallback(async () => {
@@ -66,6 +79,10 @@ export default function App() {
     startAutoCheck((info) => setUpdateInfo(info));
     return () => stopAutoCheck();
   }, []);
+
+  useEffect(() => {
+    if (appState === "unlocked") loadHostsList();
+  }, [appState, loadHostsList]);
 
   useEffect(() => {
     const unlisten = listen<number>("pty-closed", (event) => {
@@ -166,6 +183,7 @@ export default function App() {
         activeView={activeView}
         onViewChange={onViewChange}
         updateInfo={updateInfo}
+        activeTunnelCount={activeTunnelCount}
       />
       <div style={{ flex: 1, display: activeView === "terminals" ? "flex" : "none", flexDirection: "column", overflow: "hidden" }}>
         <WorkspacePanel
@@ -181,6 +199,9 @@ export default function App() {
       </div>
       <div style={{ flex: 1, display: activeView === "hosts" ? "flex" : "none", flexDirection: "column", overflow: "hidden" }}>
         <HostsPanel onConnect={onConnectHost} />
+      </div>
+      <div style={{ flex: 1, display: activeView === "tunnels" ? "flex" : "none", flexDirection: "column", overflow: "hidden" }}>
+        <TunnelsPanel hosts={hostsList} onActiveTunnelsChange={setActiveTunnelCount} />
       </div>
       <div style={{ flex: 1, display: activeView === "settings" ? "flex" : "none", flexDirection: "column", overflow: "hidden" }}>
         <SettingsPanel updateInfo={updateInfo} onUpdateChecked={setUpdateInfo} shortcuts={shortcuts} />

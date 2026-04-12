@@ -2,11 +2,11 @@ import { useCallback } from "react";
 import { WorkspaceAPI, genPaneId, genTabId } from "../hooks/useWorkspace";
 import { TabDragAPI } from "../hooks/useTabDrag";
 import { PaneDragAPI } from "../hooks/usePaneDrag";
-import { IconSettings, IconTerminal, IconPlus, IconHosts } from "./icons";
+import { IconSettings, IconTerminal, IconPlus, IconHosts, IconTunnels } from "./icons";
 import TabItem from "./TabItem";
 import { UpdateInfo } from "../lib/updater";
 
-export type View = "terminals" | "hosts" | "settings";
+export type View = "terminals" | "hosts" | "tunnels" | "settings";
 
 interface Props {
   workspace: WorkspaceAPI;
@@ -17,9 +17,10 @@ interface Props {
   activeView: View;
   onViewChange: (view: View) => void;
   updateInfo?: UpdateInfo | null;
+  activeTunnelCount?: number;
 }
 
-export default function Sidebar({ workspace, tabDrag, paneDrag, sidebarRef, tabItemRefs, activeView, onViewChange, updateInfo }: Props) {
+export default function Sidebar({ workspace, tabDrag, paneDrag, sidebarRef, tabItemRefs, activeView, onViewChange, updateInfo, activeTunnelCount = 0 }: Props) {
   const { state, dispatch, getTabLabel } = workspace;
   const { tabs, activeTabId } = state;
 
@@ -61,21 +62,51 @@ export default function Sidebar({ workspace, tabDrag, paneDrag, sidebarRef, tabI
       <div data-tauri-drag-region style={{ height: 36, flexShrink: 0, borderBottom: "1px solid #161925" }} />
 
       <div style={{ padding: "10px 8px 8px", borderBottom: "1px solid #161925", flexShrink: 0, display: "flex", flexDirection: "column", gap: 6 }}>
-        <button
-          onClick={() => onViewChange(activeView === "hosts" ? "terminals" : "hosts")}
-          style={{
-            width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 7,
-            padding: "7px 0", borderRadius: 9, border: "1px solid",
-            borderColor: activeView === "hosts" ? "#667eea" : "#1e2330",
-            cursor: "pointer",
-            background: activeView === "hosts" ? "rgba(102,126,234,0.12)" : "transparent",
-            color: activeView === "hosts" ? "#667eea" : "#4a5568",
-            fontSize: 12, fontWeight: 600, fontFamily: "inherit",
-            transition: "all 0.15s ease",
-          }}
-        >
-          <IconHosts color={activeView === "hosts" ? "#667eea" : "#4a5568"} /> Hosts
-        </button>
+        <div style={{ display: "flex", gap: 4 }}>
+          <button
+            onClick={() => onViewChange(activeView === "hosts" ? "terminals" : "hosts")}
+            style={{
+              flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
+              padding: "7px 0", borderRadius: 9, border: "1px solid",
+              borderColor: activeView === "hosts" ? "#667eea" : "#1e2330",
+              cursor: "pointer",
+              background: activeView === "hosts" ? "rgba(102,126,234,0.12)" : "transparent",
+              color: activeView === "hosts" ? "#667eea" : "#4a5568",
+              fontSize: 11, fontWeight: 600, fontFamily: "inherit",
+              transition: "all 0.15s ease",
+            }}
+          >
+            <IconHosts color={activeView === "hosts" ? "#667eea" : "#4a5568"} /> Hosts
+          </button>
+          <button
+            onClick={() => onViewChange(activeView === "tunnels" ? "terminals" : "tunnels")}
+            style={{
+              flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
+              padding: "7px 0", borderRadius: 9, border: "1px solid",
+              borderColor: activeView === "tunnels" ? "#667eea" : "#1e2330",
+              cursor: "pointer",
+              background: activeView === "tunnels" ? "rgba(102,126,234,0.12)" : "transparent",
+              color: activeView === "tunnels" ? "#667eea" : "#4a5568",
+              fontSize: 11, fontWeight: 600, fontFamily: "inherit",
+              transition: "all 0.15s ease",
+              position: "relative",
+            }}
+          >
+            <IconTunnels color={activeView === "tunnels" ? "#667eea" : "#4a5568"} /> Tunnels
+            {activeTunnelCount > 0 && (
+              <span style={{
+                position: "absolute", top: -4, right: -2,
+                minWidth: 16, height: 16, borderRadius: 8,
+                background: "#22c55e", color: "#fff",
+                fontSize: 9, fontWeight: 700,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                padding: "0 4px", lineHeight: 1,
+              }}>
+                {activeTunnelCount}
+              </span>
+            )}
+          </button>
+        </div>
         <button onClick={onNew} style={{
           width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 7,
           padding: "8px 0", borderRadius: 9, border: "none", cursor: "pointer",

@@ -5,7 +5,7 @@ pub mod store;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-use store::{EncryptedStore, HostEntry, HostStore, HostsFile, PlaintextStore};
+use store::{EncryptedStore, HostEntry, HostStore, HostsFile, PlaintextStore, TunnelEntry};
 use tauri::{AppHandle, Manager};
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
@@ -38,6 +38,30 @@ pub struct HostPayload {
     pub password: Option<String>,
     pub group: String,
     pub jump_path: Option<Vec<u32>>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct TunnelDto {
+    pub id: u32,
+    pub label: String,
+    pub host_id: u32,
+    pub tunnel_type: String,
+    pub bind_address: String,
+    pub source_port: u16,
+    pub destination_host: String,
+    pub destination_port: u16,
+}
+
+#[derive(Deserialize)]
+pub struct TunnelPayload {
+    pub id: Option<u32>,
+    pub label: String,
+    pub host_id: u32,
+    pub tunnel_type: String,
+    pub bind_address: String,
+    pub source_port: u16,
+    pub destination_host: String,
+    pub destination_port: u16,
 }
 
 #[derive(Serialize)]
@@ -379,6 +403,72 @@ pub async fn delete_host(id: u32, app: AppHandle) -> Result<(), String> {
     let s = require_store(&store)?;
     s.delete(id)?;
     info!(id, "Host deleted");
+    Ok(())
+}
+
+fn tunnel_entry_to_dto(entry: &TunnelEntry) -> TunnelDto {
+    TunnelDto {
+        id: entry.id,
+        label: entry.label.clone(),
+        host_id: entry.host_id,
+        tunnel_type: entry.tunnel_type.clone(),
+        bind_address: entry.bind_address.clone(),
+        source_port: entry.source_port,
+        destination_host: entry.destination_host.clone(),
+        destination_port: entry.destination_port,
+    }
+}
+
+#[tauri::command]
+pub async fn get_tunnels(app: AppHandle) -> Result<Vec<TunnelDto>, String> {
+    let state = app.state::<HostsState>();
+    let store = state.store.lock().await;
+    let s = require_store(&store)?;
+    let entries = s.list_tunnels()?;
+    Ok(entries.iter().map(tunnel_entry_to_dto).collect())
+}
+
+#[tauri::command]
+pub async fn save_tunnel(payload: TunnelPayload, app: AppHandle) -> Result<TunnelDto, String> {
+    let state = app.state::<HostsState>();
+    let store = state.store.lock().await;
+    let s = require_store(&store)?;
+
+    let entry = TunnelEntry {
+        id: payload.id.unwrap_or(0),
+        label: payload.label.trim().to_string(),
+        host_id: payload.host_id,
+        tunnel_type: payload.tunnel_type.clone(),
+        bind_address: if payload.bind_address.trim().is_empty() {
+            "127.0.0.1".to_string()
+        } else {
+            payload.bind_address.trim().to_string()
+        },
+        source_port: payload.source_port,
+        destination_host: payload.destination_host.trim().to_string(),
+        destination_port: payload.destination_port,
+    };
+
+    let saved = if payload.id.is_some() {
+        s.update_tunnel(entry.clone())?;
+        info!(id = entry.id, label = %entry.label, "Tunnel updated");
+        entry
+    } else {
+        let added = s.add_tunnel(entry)?;
+        info!(id = added.id, label = %added.label, "Tunnel added");
+        added
+    };
+
+    Ok(tunnel_entry_to_dto(&saved))
+}
+
+#[tauri::command]
+pub async fn delete_tunnel(id: u32, app: AppHandle) -> Result<(), String> {
+    let state = app.state::<HostsState>();
+    let store = state.store.lock().await;
+    let s = require_store(&store)?;
+    s.delete_tunnel(id)?;
+    info!(id, "Tunnel deleted");
     Ok(())
 }
 

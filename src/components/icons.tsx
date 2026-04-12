@@ -64,6 +64,18 @@ export function IconHosts({ color = "#4a5568" }: { color?: string }) {
   );
 }
 
+export function IconTunnels({ color = "#4a5568" }: { color?: string }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 8h4M16 8h4" />
+      <path d="M4 16h4M16 16h4" />
+      <circle cx="12" cy="8" r="4" />
+      <circle cx="12" cy="16" r="4" />
+      <path d="M8 8h0M16 8h0M8 16h0M16 16h0" strokeWidth="2.5" />
+    </svg>
+  );
+}
+
 export function IconSftp({ color = "#4a5568" }: { color?: string }) {
   return (
     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
