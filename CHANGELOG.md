@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.2.4
+
+Beta update channel and update system improvements.
+
+### Features
+
+- Beta updates opt-in — checkbox in Settings → General to receive pre-release versions from GitHub
+- Update checks moved to Rust backend for dynamic endpoint resolution and better reliability
+
+### Improvements
+
+- Update preferences (auto-check, beta channel) now persist in settings.json instead of localStorage
+- Release workflow automatically marks tags containing `-alpha`, `-beta`, or `-rc` as pre-releases
+
 ## v0.2.3
 
 Terminal zoom, auto-reconnect for SSH sessions, and host password reveal.

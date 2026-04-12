@@ -3,6 +3,7 @@ mod pty;
 mod settings;
 mod sftp;
 mod ssh;
+mod updater;
 
 use tauri::Manager;
 use tauri::menu::{MenuBuilder, SubmenuBuilder};
@@ -62,6 +63,7 @@ pub fn run() {
             }
 
             app.manage(hosts_state);
+            app.manage(updater::UpdaterState::new());
 
             #[cfg(target_os = "macos")]
             {
@@ -160,6 +162,8 @@ pub fn run() {
             sftp::transfer::sftp_cancel_transfer,
             settings::get_settings,
             settings::set_settings,
+            updater::check_for_update,
+            updater::download_and_install_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

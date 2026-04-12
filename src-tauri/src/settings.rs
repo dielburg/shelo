@@ -56,3 +56,7 @@ pub async fn set_settings(settings: serde_json::Value, app: tauri::AppHandle) ->
     info!("Settings saved");
     Ok(())
 }
+
+pub async fn get_settings_internal(state: &SettingsState) -> serde_json::Value {
+    state.settings.lock().await.clone()
+}

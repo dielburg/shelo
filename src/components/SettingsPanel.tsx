@@ -8,6 +8,8 @@ import {
   downloadAndInstall,
   getAutoCheckEnabled,
   setAutoCheckEnabled,
+  getIncludeBeta,
+  setIncludeBeta,
   DownloadProgress,
   UpdateInfo,
 } from "../lib/updater";
@@ -119,7 +121,8 @@ function GeneralSettings({ updateInfo, onUpdateChecked }: {
   onUpdateChecked?: (info: UpdateInfo | null) => void;
 }) {
   const [version, setVersion] = useState("");
-  const [autoCheck, setAutoCheck] = useState(getAutoCheckEnabled);
+  const [autoCheck, setAutoCheck] = useState(true);
+  const [includeBeta, setIncludeBetaState] = useState(false);
   const [checking, setChecking] = useState(false);
   const [checkResult, setCheckResult] = useState<UpdateInfo | null>(updateInfo);
   const [downloading, setDownloading] = useState(false);
@@ -128,11 +131,18 @@ function GeneralSettings({ updateInfo, onUpdateChecked }: {
 
   useState(() => {
     getVersion().then(setVersion).catch(() => setVersion("unknown"));
+    getAutoCheckEnabled().then(setAutoCheck);
+    getIncludeBeta().then(setIncludeBetaState);
   });
 
   const handleToggleAutoCheck = useCallback((enabled: boolean) => {
     setAutoCheck(enabled);
     setAutoCheckEnabled(enabled);
+  }, []);
+
+  const handleToggleBeta = useCallback((enabled: boolean) => {
+    setIncludeBetaState(enabled);
+    setIncludeBeta(enabled);
   }, []);
 
   const handleCheckNow = useCallback(async () => {
@@ -210,6 +220,21 @@ function GeneralSettings({ updateInfo, onUpdateChecked }: {
             style={{ accentColor: "#667eea", width: 14, height: 14 }}
           />
           <span style={{ fontSize: 12, color: "#cbd5e1" }}>Check for updates automatically</span>
+        </label>
+      </SettingsRow>
+
+      <SettingsRow
+        label="Beta updates"
+        description="Receive pre-release versions. These may contain bugs or incomplete features."
+      >
+        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+          <input
+            type="checkbox"
+            checked={includeBeta}
+            onChange={e => handleToggleBeta(e.target.checked)}
+            style={{ accentColor: "#667eea", width: 14, height: 14 }}
+          />
+          <span style={{ fontSize: 12, color: "#cbd5e1" }}>Include beta updates</span>
         </label>
       </SettingsRow>
 
