@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { IconTunnels, IconPlus } from "./icons";
 import WindowControls from "./WindowControls";
 
@@ -19,9 +20,17 @@ interface Host {
   label: string;
 }
 
+export type TunnelStatus = "idle" | "connecting" | "started" | "error";
+
+export interface TunnelCounts {
+  active: number;
+  error: number;
+}
+
 interface Props {
   hosts: Host[];
-  onActiveTunnelsChange?: (count: number) => void;
+  visible?: boolean;
+  onTunnelCountsChange?: (counts: TunnelCounts) => void;
 }
 
 type View = "list" | "form";
@@ -46,12 +55,22 @@ const emptyForm: FormState = {
   destinationPort: "",
 };
 
-export default function TunnelsPanel({ hosts, onActiveTunnelsChange }: Props) {
+interface HostKeyVerification {
+  tunnelId: number;
+  stage: "unknown" | "changed";
+  fingerprint: string;
+  expectedFingerprint?: string;
+  hostname: string;
+  port: number;
+}
+
+export default function TunnelsPanel({ hosts, visible, onTunnelCountsChange }: Props) {
   const [tunnels, setTunnels] = useState<Tunnel[]>([]);
-  const [activeTunnels, setActiveTunnels] = useState<Set<number>>(new Set());
+  const [tunnelStatuses, setTunnelStatuses] = useState<Map<number, { status: TunnelStatus; error?: string }>>(new Map());
   const [view, setView] = useState<View>("list");
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState<FormState>({ ...emptyForm });
+  const [hostKeyVerify, setHostKeyVerify] = useState<HostKeyVerification | null>(null);
 
   const loadTunnels = useCallback(async () => {
     try {
@@ -65,8 +84,25 @@ export default function TunnelsPanel({ hosts, onActiveTunnelsChange }: Props) {
   useEffect(() => { loadTunnels(); }, [loadTunnels]);
 
   useEffect(() => {
-    onActiveTunnelsChange?.(activeTunnels.size);
-  }, [activeTunnels, onActiveTunnelsChange]);
+    let active = 0, error = 0;
+    tunnelStatuses.forEach(v => {
+      if (v.status === "started") active++;
+      if (v.status === "error") error++;
+    });
+    onTunnelCountsChange?.({ active, error });
+  }, [tunnelStatuses, onTunnelCountsChange]);
+
+  useEffect(() => {
+    if (!visible) return;
+    setTunnelStatuses(prev => {
+      let changed = false;
+      const next = new Map(prev);
+      next.forEach((v, k) => {
+        if (v.status === "error") { next.delete(k); changed = true; }
+      });
+      return changed ? next : prev;
+    });
+  }, [visible]);
 
   const goToList = useCallback(() => {
     setForm({ ...emptyForm });
@@ -119,7 +155,7 @@ export default function TunnelsPanel({ hosts, onActiveTunnelsChange }: Props) {
   const onDelete = useCallback(async (id: number) => {
     try {
       await invoke("delete_tunnel", { id });
-      setActiveTunnels(prev => { const next = new Set(prev); next.delete(id); return next; });
+      setTunnelStatuses(prev => { const next = new Map(prev); next.delete(id); return next; });
       await loadTunnels();
     } catch (e) {
       console.error("Failed to delete tunnel:", e);
@@ -127,19 +163,71 @@ export default function TunnelsPanel({ hosts, onActiveTunnelsChange }: Props) {
   }, [loadTunnels]);
 
   const onToggle = useCallback(async (id: number) => {
-    const isActive = activeTunnels.has(id);
-    if (isActive) {
-      setActiveTunnels(prev => { const next = new Set(prev); next.delete(id); return next; });
-    } else {
-      setActiveTunnels(prev => new Set(prev).add(id));
+    const entry = tunnelStatuses.get(id);
+    const isActive = entry?.status === "started";
+    try {
+      if (isActive) {
+        await invoke("stop_tunnel", { tunnelId: id });
+      } else {
+        setTunnelStatuses(prev => new Map(prev).set(id, { status: "connecting" }));
+        await invoke("start_tunnel", { tunnelId: id });
+      }
+    } catch (e) {
+      console.error("Tunnel toggle failed:", e);
+      setTunnelStatuses(prev => new Map(prev).set(id, { status: "error", error: String(e) }));
     }
-  }, [activeTunnels]);
+  }, [tunnelStatuses]);
+
+  const onDismissError = useCallback((id: number) => {
+    setTunnelStatuses(prev => { const next = new Map(prev); next.delete(id); return next; });
+  }, []);
+
+  useEffect(() => {
+    const unlisten = listen<{ id: number; status: string; error?: string }>("tunnel-status", (event) => {
+      const { id, status, error } = event.payload;
+      if (status === "started") {
+        setTunnelStatuses(prev => new Map(prev).set(id, { status: "started" }));
+      } else if (status === "connecting") {
+        setTunnelStatuses(prev => new Map(prev).set(id, { status: "connecting" }));
+      } else if (status === "stopped") {
+        setTunnelStatuses(prev => { const next = new Map(prev); next.delete(id); return next; });
+      } else if (status === "error") {
+        setTunnelStatuses(prev => new Map(prev).set(id, { status: "error", error }));
+      }
+    });
+    return () => { unlisten.then(fn => fn()); };
+  }, []);
+
+  useEffect(() => {
+    const unlisten = listen<{
+      tunnel_id: number; stage: string; fingerprint: string;
+      expected_fingerprint?: string; hostname: string; port: number;
+    }>("tunnel-host-verify", (event) => {
+      const p = event.payload;
+      setHostKeyVerify({
+        tunnelId: p.tunnel_id,
+        stage: p.stage as "unknown" | "changed",
+        fingerprint: p.fingerprint,
+        expectedFingerprint: p.expected_fingerprint,
+        hostname: p.hostname,
+        port: p.port,
+      });
+    });
+    return () => { unlisten.then(fn => fn()); };
+  }, []);
+
+  const respondHostKey = useCallback((accept: boolean) => {
+    if (!hostKeyVerify) return;
+    invoke("respond_tunnel_host_key", { tunnelId: hostKeyVerify.tunnelId, accept }).catch(console.error);
+    setHostKeyVerify(null);
+  }, [hostKeyVerify]);
 
   return (
     <div style={{
       display: "flex", flexDirection: "column", height: "100%", width: "100%",
       background: "#0b0d12",
       userSelect: "none", WebkitUserSelect: "none", cursor: "default",
+      position: "relative",
     }}>
       <div style={{ height: 36, flexShrink: 0, borderBottom: "1px solid #161925", background: "#080a0f", display: "flex", alignItems: "center", position: "relative" }}>
         <div data-tauri-drag-region style={{ position: "absolute", inset: 0 }} />
@@ -147,10 +235,14 @@ export default function TunnelsPanel({ hosts, onActiveTunnelsChange }: Props) {
       </div>
       <div style={{ flex: 1, overflow: "hidden" }}>
         {view === "list"
-          ? <TunnelListView tunnels={tunnels} hosts={hosts} activeTunnels={activeTunnels} onAdd={() => goToForm()} onEdit={goToForm} onDelete={onDelete} onToggle={onToggle} />
+          ? <TunnelListView tunnels={tunnels} hosts={hosts} tunnelStatuses={tunnelStatuses} onAdd={() => goToForm()} onEdit={goToForm} onDelete={onDelete} onToggle={onToggle} onDismissError={onDismissError} />
           : <TunnelFormView form={form} setForm={setForm} editingId={editingId} hosts={hosts} onSave={onSave} onCancel={goToList} />
         }
       </div>
+
+      {hostKeyVerify && (
+        <HostKeyVerifyDialog verify={hostKeyVerify} onRespond={respondHostKey} />
+      )}
     </div>
   );
 }
@@ -182,14 +274,15 @@ const hintStyle: React.CSSProperties = {
   fontSize: 10, color: "#475569", marginTop: 4, lineHeight: 1.4,
 };
 
-function TunnelListView({ tunnels, hosts, activeTunnels, onAdd, onEdit, onDelete, onToggle }: {
+function TunnelListView({ tunnels, hosts, tunnelStatuses, onAdd, onEdit, onDelete, onToggle, onDismissError }: {
   tunnels: Tunnel[];
   hosts: Host[];
-  activeTunnels: Set<number>;
+  tunnelStatuses: Map<number, { status: TunnelStatus; error?: string }>;
   onAdd: () => void;
   onEdit: (t: Tunnel) => void;
   onDelete: (id: number) => void;
   onToggle: (id: number) => void;
+  onDismissError: (id: number) => void;
 }) {
   const getHostLabel = (hostId: number) => hosts.find(h => h.id === hostId)?.label ?? "Unknown host";
 
@@ -223,31 +316,52 @@ function TunnelListView({ tunnels, hosts, activeTunnels, onAdd, onEdit, onDelete
             <span style={{ fontSize: 10, color: "#1e2330" }}>Click "Add" to create a port forwarding tunnel</span>
           </div>
         ) : (
-          tunnels.map(t => (
-            <TunnelCard key={t.id} tunnel={t} hostLabel={getHostLabel(t.host_id)} isActive={activeTunnels.has(t.id)} onEdit={() => onEdit(t)} onDelete={() => onDelete(t.id)} onToggle={() => onToggle(t.id)} />
-          ))
+          tunnels.map(t => {
+            const entry = tunnelStatuses.get(t.id);
+            return (
+              <TunnelCard
+                key={t.id}
+                tunnel={t}
+                hostLabel={getHostLabel(t.host_id)}
+                status={entry?.status ?? "idle"}
+                errorMsg={entry?.error}
+                onEdit={() => onEdit(t)}
+                onDelete={() => onDelete(t.id)}
+                onToggle={() => onToggle(t.id)}
+                onDismissError={() => onDismissError(t.id)}
+              />
+            );
+          })
         )}
       </div>
     </div>
   );
 }
 
-function TunnelCard({ tunnel, hostLabel, isActive, onEdit, onDelete, onToggle }: {
+function TunnelCard({ tunnel, hostLabel, status, errorMsg, onEdit, onDelete, onToggle, onDismissError }: {
   tunnel: Tunnel;
   hostLabel: string;
-  isActive: boolean;
+  status: TunnelStatus;
+  errorMsg?: string;
   onEdit: () => void;
   onDelete: () => void;
   onToggle: () => void;
+  onDismissError: () => void;
 }) {
   const isLocal = tunnel.tunnel_type === "local";
   const typeLabel = isLocal ? "LOCAL" : "REMOTE";
   const typeColor = isLocal ? "#667eea" : "#f59e0b";
+  const isActive = status === "started";
+  const isConnecting = status === "connecting";
+  const isError = status === "error";
+  const isBusy = isActive || isConnecting;
+
+  const borderColor = isActive ? "#22c55e44" : isError ? "#ef444444" : isConnecting ? "#f59e0b44" : "#1e2330";
 
   return (
     <div style={{
       background: "#0d1017", borderRadius: 10,
-      border: isActive ? "1px solid #22c55e44" : "1px solid #1e2330",
+      border: `1px solid ${borderColor}`,
       padding: 14, marginBottom: 8,
       transition: "border-color 0.2s ease",
     }}>
@@ -268,17 +382,31 @@ function TunnelCard({ tunnel, hostLabel, isActive, onEdit, onDelete, onToggle }:
               display: "inline-block",
             }} />
           )}
+          {isConnecting && (
+            <span style={{
+              width: 6, height: 6, borderRadius: "50%",
+              background: "#f59e0b",
+              display: "inline-block",
+              animation: "tunnelPulse 1s ease-in-out infinite",
+            }} />
+          )}
         </div>
         <div style={{ display: "flex", gap: 4 }}>
-          <button onClick={onToggle} style={{
-            ...btnSecondary,
-            color: isActive ? "#ef4444" : "#22c55e",
-            borderColor: isActive ? "#ef444433" : "#22c55e33",
-          }}>
-            {isActive ? "Stop" : "Start"}
-          </button>
-          <button onClick={onEdit} style={{ ...btnSecondary, opacity: isActive ? 0.4 : 1, pointerEvents: isActive ? "none" : "auto" }}>Edit</button>
-          <button onClick={onDelete} style={{ ...btnSecondary, color: "#ef4444", borderColor: "#ef444433", opacity: isActive ? 0.4 : 1, pointerEvents: isActive ? "none" : "auto" }}>Delete</button>
+          {isConnecting ? (
+            <button style={{ ...btnSecondary, color: "#f59e0b", borderColor: "#f59e0b33", cursor: "default" }}>
+              Connecting...
+            </button>
+          ) : (
+            <button onClick={onToggle} style={{
+              ...btnSecondary,
+              color: isActive ? "#ef4444" : "#22c55e",
+              borderColor: isActive ? "#ef444433" : "#22c55e33",
+            }}>
+              {isActive ? "Stop" : "Start"}
+            </button>
+          )}
+          <button onClick={onEdit} style={{ ...btnSecondary, opacity: isBusy ? 0.4 : 1, pointerEvents: isBusy ? "none" : "auto" }}>Edit</button>
+          <button onClick={onDelete} style={{ ...btnSecondary, color: "#ef4444", borderColor: "#ef444433", opacity: isBusy ? 0.4 : 1, pointerEvents: isBusy ? "none" : "auto" }}>Delete</button>
         </div>
       </div>
 
@@ -327,6 +455,113 @@ function TunnelCard({ tunnel, hostLabel, isActive, onEdit, onDelete, onToggle }:
           <span style={{ color: isLocal ? "#f59e0b" : "#667eea", fontWeight: 600 }}>
             {tunnel.destination_host}:{tunnel.destination_port}
           </span>
+        </div>
+      </div>
+
+      {isError && errorMsg && (
+        <div style={{
+          marginTop: 8, padding: "8px 10px", borderRadius: 6,
+          background: "#ef444412", border: "1px solid #ef444433",
+          display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8,
+        }}>
+          <span style={{ fontSize: 10, color: "#ef4444", lineHeight: 1.4, flex: 1 }}>
+            {errorMsg}
+          </span>
+          <button
+            onClick={onDismissError}
+            style={{
+              background: "none", border: "none", color: "#ef444488",
+              cursor: "pointer", fontSize: 12, padding: 0, lineHeight: 1, flexShrink: 0,
+            }}
+          >
+            &#x2715;
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function HostKeyVerifyDialog({ verify, onRespond }: {
+  verify: HostKeyVerification;
+  onRespond: (accept: boolean) => void;
+}) {
+  const isChanged = verify.stage === "changed";
+  const warningColor = isChanged ? "#ef4444" : "#f59e0b";
+
+  return (
+    <div style={{
+      position: "absolute", inset: 0,
+      background: "rgba(0,0,0,0.7)", backdropFilter: "blur(4px)",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      zIndex: 100,
+    }}>
+      <div style={{
+        background: "#0d1017", border: `1px solid ${warningColor}44`,
+        borderRadius: 12, padding: 24, maxWidth: 420, width: "90%",
+      }}>
+        <div style={{
+          display: "flex", alignItems: "center", gap: 10, marginBottom: 16,
+        }}>
+          <span style={{ fontSize: 22 }}>&#9888;</span>
+          <span style={{ fontSize: 14, fontWeight: 700, color: warningColor }}>
+            {isChanged ? "HOST KEY CHANGED" : "Unknown Host Key"}
+          </span>
+        </div>
+
+        <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 16, lineHeight: 1.6 }}>
+          {isChanged
+            ? "WARNING: The host key for this server has changed! This could indicate a man-in-the-middle attack."
+            : `The authenticity of host "${verify.hostname}:${verify.port}" can't be established. Do you want to trust this server?`
+          }
+        </div>
+
+        {isChanged && verify.expectedFingerprint && (
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 9, color: "#4a5568", fontWeight: 600, textTransform: "uppercase", marginBottom: 4 }}>
+              Expected Fingerprint
+            </div>
+            <div style={{
+              fontFamily: "'JetBrains Mono', monospace", fontSize: 10,
+              color: "#ef4444", background: "#ef444412",
+              padding: "8px 10px", borderRadius: 6, wordBreak: "break-all",
+            }}>
+              {verify.expectedFingerprint}
+            </div>
+          </div>
+        )}
+
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ fontSize: 9, color: "#4a5568", fontWeight: 600, textTransform: "uppercase", marginBottom: 4 }}>
+            {isChanged ? "Received Fingerprint" : "Server Fingerprint"}
+          </div>
+          <div style={{
+            fontFamily: "'JetBrains Mono', monospace", fontSize: 10,
+            color: "#e2e8f0", background: "#1e233022",
+            padding: "8px 10px", borderRadius: 6, wordBreak: "break-all",
+          }}>
+            {verify.fingerprint}
+          </div>
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <button
+            onClick={() => onRespond(false)}
+            style={{ ...btnSecondary, padding: "6px 14px" }}
+          >
+            Reject
+          </button>
+          <button
+            onClick={() => onRespond(true)}
+            style={{
+              ...btnPrimary,
+              background: isChanged
+                ? "linear-gradient(135deg, #ef4444, #dc2626)"
+                : "linear-gradient(135deg, #667eea, #764ba2)",
+            }}
+          >
+            {isChanged ? "Remove Old Key & Trust" : "Trust & Save"}
+          </button>
         </div>
       </div>
     </div>

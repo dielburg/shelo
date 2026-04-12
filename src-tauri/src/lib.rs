@@ -3,6 +3,7 @@ mod pty;
 mod settings;
 mod sftp;
 mod ssh;
+mod tunnels;
 
 use tauri::Manager;
 use tauri::menu::{MenuBuilder, SubmenuBuilder};
@@ -62,6 +63,7 @@ pub fn run() {
             }
 
             app.manage(hosts_state);
+            app.manage(tunnels::TunnelState::new());
 
             #[cfg(target_os = "macos")]
             {
@@ -163,6 +165,9 @@ pub fn run() {
             sftp::transfer::sftp_cancel_transfer,
             settings::get_settings,
             settings::set_settings,
+            tunnels::start_tunnel,
+            tunnels::stop_tunnel,
+            tunnels::respond_tunnel_host_key,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

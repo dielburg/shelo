@@ -14,7 +14,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::hosts::HostsState;
 
-mod known_hosts;
+pub(crate) mod known_hosts;
 use known_hosts::{HostKeyStatus, KnownHostsStore};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -80,7 +80,7 @@ struct SshHandle {
 
 pub struct SshState {
     handles: Arc<Mutex<HashMap<u32, SshHandle>>>,
-    known_hosts: Arc<Mutex<KnownHostsStore>>,
+    pub(crate) known_hosts: Arc<Mutex<KnownHostsStore>>,
     pending_verifications: Arc<Mutex<HashMap<u32, PendingVerification>>>,
 }
 
@@ -394,7 +394,7 @@ async fn ssh_authenticate_and_verify(
     Ok(())
 }
 
-fn make_ssh_config() -> Arc<client::Config> {
+pub(crate) fn make_ssh_config() -> Arc<client::Config> {
     Arc::new(client::Config {
         keepalive_interval: Some(KEEPALIVE_INTERVAL),
         keepalive_max: 3,
@@ -695,7 +695,7 @@ async fn open_pty_channel(
     Ok(())
 }
 
-fn ssh_fingerprint(key: &PublicKey) -> String {
+pub(crate) fn ssh_fingerprint(key: &PublicKey) -> String {
     use base64::Engine;
     use russh::keys::PublicKeyBase64;
     use sha2::{Digest, Sha256};

@@ -17,10 +17,10 @@ interface Props {
   activeView: View;
   onViewChange: (view: View) => void;
   updateInfo?: UpdateInfo | null;
-  activeTunnelCount?: number;
+  tunnelCounts?: { active: number; error: number };
 }
 
-export default function Sidebar({ workspace, tabDrag, paneDrag, sidebarRef, tabItemRefs, activeView, onViewChange, updateInfo, activeTunnelCount = 0 }: Props) {
+export default function Sidebar({ workspace, tabDrag, paneDrag, sidebarRef, tabItemRefs, activeView, onViewChange, updateInfo, tunnelCounts = { active: 0, error: 0 } }: Props) {
   const { state, dispatch, getTabLabel } = workspace;
   const { tabs, activeTabId } = state;
 
@@ -93,7 +93,19 @@ export default function Sidebar({ workspace, tabDrag, paneDrag, sidebarRef, tabI
             }}
           >
             <IconTunnels color={activeView === "tunnels" ? "#667eea" : "#4a5568"} /> Tunnels
-            {activeTunnelCount > 0 && (
+            {tunnelCounts.error > 0 && (
+              <span style={{
+                position: "absolute", top: -4, right: -2,
+                minWidth: 16, height: 16, borderRadius: 8,
+                background: "#ef4444", color: "#fff",
+                fontSize: 9, fontWeight: 700,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                padding: "0 4px", lineHeight: 1,
+              }}>
+                {tunnelCounts.error}
+              </span>
+            )}
+            {tunnelCounts.error === 0 && tunnelCounts.active > 0 && (
               <span style={{
                 position: "absolute", top: -4, right: -2,
                 minWidth: 16, height: 16, borderRadius: 8,
@@ -102,7 +114,7 @@ export default function Sidebar({ workspace, tabDrag, paneDrag, sidebarRef, tabI
                 display: "flex", alignItems: "center", justifyContent: "center",
                 padding: "0 4px", lineHeight: 1,
               }}>
-                {activeTunnelCount}
+                {tunnelCounts.active}
               </span>
             )}
           </button>

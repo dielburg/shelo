@@ -9,7 +9,7 @@ import { useShortcuts } from "./hooks/useShortcuts";
 import Sidebar, { View } from "./components/Sidebar";
 import WorkspacePanel from "./components/WorkspacePanel";
 import HostsPanel, { Host } from "./components/HostsPanel";
-import TunnelsPanel from "./components/TunnelsPanel";
+import TunnelsPanel, { TunnelCounts } from "./components/TunnelsPanel";
 import VaultSetup from "./components/VaultSetup";
 import VaultUnlock from "./components/VaultUnlock";
 import SettingsPanel from "./components/SettingsPanel";
@@ -28,7 +28,7 @@ export default function App() {
   const [activeView, setActiveView] = useState<View>("terminals");
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [hostsList, setHostsList] = useState<Host[]>([]);
-  const [activeTunnelCount, setActiveTunnelCount] = useState(0);
+  const [tunnelCounts, setTunnelCounts] = useState<TunnelCounts>({ active: 0, error: 0 });
 
   const workspace = useWorkspace();
   const tabDrag = useTabDrag(workspace, { mainPanelRef, paneRefs, tabItemRefs });
@@ -183,7 +183,7 @@ export default function App() {
         activeView={activeView}
         onViewChange={onViewChange}
         updateInfo={updateInfo}
-        activeTunnelCount={activeTunnelCount}
+        tunnelCounts={tunnelCounts}
       />
       <div style={{ flex: 1, display: activeView === "terminals" ? "flex" : "none", flexDirection: "column", overflow: "hidden" }}>
         <WorkspacePanel
@@ -201,7 +201,7 @@ export default function App() {
         <HostsPanel onConnect={onConnectHost} />
       </div>
       <div style={{ flex: 1, display: activeView === "tunnels" ? "flex" : "none", flexDirection: "column", overflow: "hidden" }}>
-        <TunnelsPanel hosts={hostsList} onActiveTunnelsChange={setActiveTunnelCount} />
+        <TunnelsPanel hosts={hostsList} visible={activeView === "tunnels"} onTunnelCountsChange={setTunnelCounts} />
       </div>
       <div style={{ flex: 1, display: activeView === "settings" ? "flex" : "none", flexDirection: "column", overflow: "hidden" }}>
         <SettingsPanel updateInfo={updateInfo} onUpdateChecked={setUpdateInfo} shortcuts={shortcuts} />
