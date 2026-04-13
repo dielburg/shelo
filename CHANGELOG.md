@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.3.0-beta.1
+
+SSH port forwarding tunnels.
+
+### Features
+
+- Local and remote SSH port forwarding tunnels with full lifecycle management
+- Tunnel cards with Start/Stop controls, connecting animation, and error display
+- Interactive host key verification dialog for tunnel SSH connections
+- SSH connection health monitoring for active tunnels with automatic status updates
+- Active tunnel counter badge on Tunnels sidebar button (green/red by status)
+
 ## v0.2.4
 
 Beta update channel and update system improvements.
