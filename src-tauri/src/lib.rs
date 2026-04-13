@@ -4,6 +4,7 @@ mod settings;
 mod sftp;
 mod ssh;
 mod tunnels;
+mod updater;
 
 use tauri::Manager;
 use tauri::menu::{MenuBuilder, SubmenuBuilder};
@@ -64,6 +65,7 @@ pub fn run() {
 
             app.manage(hosts_state);
             app.manage(tunnels::TunnelState::new());
+            app.manage(updater::UpdaterState::new());
 
             #[cfg(target_os = "macos")]
             {
@@ -168,6 +170,8 @@ pub fn run() {
             tunnels::start_tunnel,
             tunnels::stop_tunnel,
             tunnels::respond_tunnel_host_key,
+            updater::check_for_update,
+            updater::download_and_install_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
