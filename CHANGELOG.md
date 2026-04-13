@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.3.0.1
+## v0.3.0-1
 
 SSH port forwarding tunnels.
 
