@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.3.0-2
+
+Bug fixes for SFTP, SSH jump hosts, and context menu.
+
+### Bug Fixes
+
+- SFTP now maintains an independent SSH connection — closing the terminal no longer disconnects the file browser
+- SFTP retry reconnects properly after a dropped connection instead of reusing the dead session
+- Fixed SSH and SFTP jump host chains not resolving recursively — connecting to host C via B (which itself requires A) now correctly routes through A → B → C
+- Fixed context menu appearing outside the visible area when right-clicking near the bottom or right edge of the window (terminal and SFTP panels)
+
 ## v0.3.0-1
 
 SSH port forwarding tunnels.

@@ -43,7 +43,14 @@ export default function ContextMenu({
     ? ` (${selectedPaths.size})` : "";
 
   return (
-    <div style={{
+    <div ref={el => {
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      const maxX = window.innerWidth - rect.width - 4;
+      const maxY = window.innerHeight - rect.height - 4;
+      if (x > maxX) el.style.left = `${maxX}px`;
+      if (y > maxY) el.style.top = `${maxY}px`;
+    }} style={{
       position: "fixed", left: x, top: y,
       background: "#1a1f2e", border: "1px solid #2a3050", borderRadius: 6,
       padding: "4px 0", zIndex: 9999, minWidth: 160, boxShadow: "0 4px 12px rgba(0,0,0,0.5)",

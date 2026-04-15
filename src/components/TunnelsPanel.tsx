@@ -356,14 +356,17 @@ function TunnelCard({ tunnel, hostLabel, status, errorMsg, onEdit, onDelete, onT
   const isError = status === "error";
   const isBusy = isActive || isConnecting;
 
-  const borderColor = isActive ? "#22c55e44" : isError ? "#ef444444" : isConnecting ? "#f59e0b44" : "#1e2330";
+  const borderColor = isActive ? "#22c55e55" : isError ? "#ef444444" : isConnecting ? "#f59e0b44" : "#1e2330";
+  const bgColor = isActive ? "#22c55e0a" : isError ? "#ef44440a" : "#0d1017";
+  const leftAccent = isActive ? "#22c55e" : isError ? "#ef4444" : isConnecting ? "#f59e0b" : "transparent";
 
   return (
     <div style={{
-      background: "#0d1017", borderRadius: 10,
+      background: bgColor, borderRadius: 10,
       border: `1px solid ${borderColor}`,
+      borderLeft: `3px solid ${leftAccent}`,
       padding: 14, marginBottom: 8,
-      transition: "border-color 0.2s ease",
+      transition: "all 0.25s ease",
     }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>

@@ -67,7 +67,8 @@ export default function FileBrowser({ pane }: Props) {
   const [platform, setPlatform] = useState<string>("");
 
   const isRemote = pane.sftpSource?.type === "remote";
-  const sshSessionId = isRemote ? (pane.sftpSource as { type: "remote"; sshSessionId: number }).sshSessionId : null;
+  const sftpSessionId = isRemote ? pane.sessionId : null;
+  const hostId = isRemote ? (pane.sftpSource as { type: "remote"; hostId: number }).hostId : null;
   const canChmod = isRemote || platform !== "windows";
 
   const listDir = useCallback(async (path: string) => {
@@ -75,8 +76,8 @@ export default function FileBrowser({ pane }: Props) {
     setError(null);
     try {
       let result: FileEntry[];
-      if (isRemote && sshSessionId !== null) {
-        result = await invoke<FileEntry[]>("sftp_list_dir", { sessionId: sshSessionId, path });
+      if (isRemote && sftpSessionId !== null) {
+        result = await invoke<FileEntry[]>("sftp_list_dir", { sessionId: sftpSessionId, path });
       } else {
         result = await invoke<FileEntry[]>("local_list_dir", { path });
       }
@@ -99,7 +100,7 @@ export default function FileBrowser({ pane }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [isRemote, sshSessionId]);
+  }, [isRemote, sftpSessionId]);
 
   const entries = useMemo(() => {
     let filtered = rawEntries;
@@ -147,8 +148,8 @@ export default function FileBrowser({ pane }: Props) {
 
     try {
       let result: FileEntry[];
-      if (isRemote && sshSessionId !== null) {
-        result = await invoke<FileEntry[]>("sftp_list_dir", { sessionId: sshSessionId, path: dir });
+      if (isRemote && sftpSessionId !== null) {
+        result = await invoke<FileEntry[]>("sftp_list_dir", { sessionId: sftpSessionId, path: dir });
       } else {
         result = await invoke<FileEntry[]>("local_list_dir", { path: dir });
       }
@@ -159,7 +160,7 @@ export default function FileBrowser({ pane }: Props) {
     } catch {
       setSuggestions([]);
     }
-  }, [isRemote, sshSessionId, showHidden]);
+  }, [isRemote, sftpSessionId, showHidden]);
 
   const onPathInputChange = useCallback((value: string) => {
     setPathInputValue(value);
@@ -250,8 +251,8 @@ export default function FileBrowser({ pane }: Props) {
       return;
     }
     try {
-      if (isRemote && sshSessionId !== null) {
-        await invoke("sftp_chmod", { sessionId: sshSessionId, path: permEditor.path, permissions: octal });
+      if (isRemote && sftpSessionId !== null) {
+        await invoke("sftp_chmod", { sessionId: sftpSessionId, path: permEditor.path, permissions: octal });
       } else {
         await invoke("local_chmod", { path: permEditor.path, permissions: octal });
       }
@@ -260,7 +261,7 @@ export default function FileBrowser({ pane }: Props) {
     }
     setPermEditor(null);
     try { await listDir(currentPath); } catch { }
-  }, [permEditor, permValue, isRemote, sshSessionId, currentPath, listDir]);
+  }, [permEditor, permValue, isRemote, sftpSessionId, currentPath, listDir]);
 
   const checkConflicts = useCallback(async (
     files: { path: string; name: string; is_dir: boolean }[],
@@ -271,8 +272,8 @@ export default function FileBrowser({ pane }: Props) {
     for (const f of files) {
       const destPath = joinPath(currentPath, f.name);
       try {
-        if (isRemote && sshSessionId !== null) {
-          await invoke("sftp_stat", { sessionId: sshSessionId, path: destPath });
+        if (isRemote && sftpSessionId !== null) {
+          await invoke("sftp_stat", { sessionId: sftpSessionId, path: destPath });
         } else {
           await invoke("local_stat", { path: destPath });
         }
@@ -300,7 +301,7 @@ export default function FileBrowser({ pane }: Props) {
       };
       processNext(conflicting, [...safe]);
     });
-  }, [currentPath, isRemote, sshSessionId]);
+  }, [currentPath, isRemote, sftpSessionId]);
 
   const onConflictAction = useCallback((action: "overwrite" | "skip" | "rename" | "overwrite-all" | "skip-all") => {
     if (!conflict) return;
@@ -361,30 +362,30 @@ export default function FileBrowser({ pane }: Props) {
           await invoke("local_copy", { srcPaths: resolvedFiles.map(f => f.path), destNames: buildDestNames(resolvedFiles), destDir: currentPath });
         }
       } else if (srcType === "local" && destType === "remote") {
-        await invoke("sftp_upload_paths", { sessionId: sshSessionId, paths: resolvedFiles.map(f => f.path), destNames: buildDestNames(resolvedFiles), remoteDir: currentPath });
+        await invoke("sftp_upload_paths", { sessionId: sftpSessionId, paths: resolvedFiles.map(f => f.path), destNames: buildDestNames(resolvedFiles), remoteDir: currentPath });
         if (move) { for (const f of resolvedFiles) await invoke("local_remove", { path: f.path, isDir: f.is_dir }); }
       } else if (srcType === "remote" && destType === "local") {
         for (const file of resolvedFiles) {
           const origName = file.path.split("/").pop() || "";
-          await invoke("sftp_download", { sessionId: payload.sshSessionId, remotePath: file.path, localDir: currentPath, isDir: file.is_dir, destName: file.name !== origName ? file.name : null });
+          await invoke("sftp_download", { sessionId: payload.sftpSessionId, remotePath: file.path, localDir: currentPath, isDir: file.is_dir, destName: file.name !== origName ? file.name : null });
         }
-        if (move) { for (const f of resolvedFiles) await invoke("sftp_remove", { sessionId: payload.sshSessionId, path: f.path, isDir: f.is_dir }); }
+        if (move) { for (const f of resolvedFiles) await invoke("sftp_remove", { sessionId: payload.sftpSessionId, path: f.path, isDir: f.is_dir }); }
       } else if (srcType === "remote" && destType === "remote") {
-        if (payload.sshSessionId === sshSessionId && move) {
+        if (payload.sftpSessionId === sftpSessionId && move) {
           for (const f of resolvedFiles) {
             const dest = joinPath(currentPath, f.name);
-            await invoke("sftp_rename", { sessionId: sshSessionId, oldPath: f.path, newPath: dest });
+            await invoke("sftp_rename", { sessionId: sftpSessionId, oldPath: f.path, newPath: dest });
           }
         } else {
-          await invoke("sftp_cross_transfer", { srcSessionId: payload.sshSessionId, destSessionId: sshSessionId, srcPaths: resolvedFiles.map(f => f.path), srcIsDirs: resolvedFiles.map(f => f.is_dir), destNames: buildDestNames(resolvedFiles), destDir: currentPath });
-          if (move) { for (const f of resolvedFiles) await invoke("sftp_remove", { sessionId: payload.sshSessionId, path: f.path, isDir: f.is_dir }); }
+          await invoke("sftp_cross_transfer", { srcSessionId: payload.sftpSessionId, destSessionId: sftpSessionId, srcPaths: resolvedFiles.map(f => f.path), srcIsDirs: resolvedFiles.map(f => f.is_dir), destNames: buildDestNames(resolvedFiles), destDir: currentPath });
+          if (move) { for (const f of resolvedFiles) await invoke("sftp_remove", { sessionId: payload.sftpSessionId, path: f.path, isDir: f.is_dir }); }
         }
       }
       await listDir(currentPath);
       if (move) emit("panel-refresh", { sourcePaneId: payload.sourcePaneId });
     } catch (err) { setError(String(err)); }
     finally { setTransferOwnerPaneId(null); }
-  }, [pane.id, isRemote, sshSessionId, currentPath, listDir, checkConflicts]);
+  }, [pane.id, isRemote, sftpSessionId, currentPath, listDir, checkConflicts]);
 
   const handleSystemDrop = useCallback(async (paths: string[]) => {
     const files = paths.map(p => {
@@ -396,15 +397,15 @@ export default function FileBrowser({ pane }: Props) {
 
     setTransferOwnerPaneId(pane.id);
     try {
-      if (isRemote && sshSessionId !== null) {
-        await invoke("sftp_upload_paths", { sessionId: sshSessionId, paths: resolvedFiles.map(f => f.path), destNames: buildDestNames(resolvedFiles), remoteDir: currentPath });
+      if (isRemote && sftpSessionId !== null) {
+        await invoke("sftp_upload_paths", { sessionId: sftpSessionId, paths: resolvedFiles.map(f => f.path), destNames: buildDestNames(resolvedFiles), remoteDir: currentPath });
       } else {
         await invoke("local_copy", { srcPaths: resolvedFiles.map(f => f.path), destNames: buildDestNames(resolvedFiles), destDir: currentPath });
         await listDir(currentPath);
       }
     } catch (e) { setError(String(e)); }
     finally { setTransferOwnerPaneId(null); }
-  }, [pane.id, isRemote, sshSessionId, currentPath, listDir, checkConflicts]);
+  }, [pane.id, isRemote, sftpSessionId, currentPath, listDir, checkConflicts]);
 
   const doCopy = useCallback((filesToCopy?: FileEntry[]) => {
     const targets = filesToCopy || entries.filter(e => selectedPaths.has(e.path));
@@ -412,10 +413,10 @@ export default function FileBrowser({ pane }: Props) {
     setClipboard({
       mode: "copy",
       sourceType: isRemote ? "remote" : "local",
-      sshSessionId,
+      sftpSessionId,
       files: targets.map(f => ({ path: f.path, name: f.name, is_dir: f.is_dir })),
     });
-  }, [entries, selectedPaths, isRemote, sshSessionId]);
+  }, [entries, selectedPaths, isRemote, sftpSessionId]);
 
   const doCut = useCallback((filesToCut?: FileEntry[]) => {
     const targets = filesToCut || entries.filter(e => selectedPaths.has(e.path));
@@ -423,10 +424,10 @@ export default function FileBrowser({ pane }: Props) {
     setClipboard({
       mode: "cut",
       sourceType: isRemote ? "remote" : "local",
-      sshSessionId,
+      sftpSessionId,
       files: targets.map(f => ({ path: f.path, name: f.name, is_dir: f.is_dir })),
     });
-  }, [entries, selectedPaths, isRemote, sshSessionId]);
+  }, [entries, selectedPaths, isRemote, sftpSessionId]);
 
   const doPaste = useCallback(async () => {
     const clip = getClipboard();
@@ -451,43 +452,43 @@ export default function FileBrowser({ pane }: Props) {
           await invoke("local_copy", { srcPaths: resolvedFiles.map(f => f.path), destNames: dn, destDir: currentPath });
         }
       } else if (srcType === "local" && destType === "remote") {
-        await invoke("sftp_upload_paths", { sessionId: sshSessionId, paths: resolvedFiles.map(f => f.path), destNames: dn, remoteDir: currentPath });
+        await invoke("sftp_upload_paths", { sessionId: sftpSessionId, paths: resolvedFiles.map(f => f.path), destNames: dn, remoteDir: currentPath });
         if (clip.mode === "cut") { for (const f of resolvedFiles) await invoke("local_remove", { path: f.path, isDir: f.is_dir }); }
       } else if (srcType === "remote" && destType === "local") {
         for (const f of resolvedFiles) {
           const origName = f.path.split("/").pop() || "";
-          await invoke("sftp_download", { sessionId: clip.sshSessionId, remotePath: f.path, localDir: currentPath, isDir: f.is_dir, destName: f.name !== origName ? f.name : null });
+          await invoke("sftp_download", { sessionId: clip.sftpSessionId, remotePath: f.path, localDir: currentPath, isDir: f.is_dir, destName: f.name !== origName ? f.name : null });
         }
-        if (clip.mode === "cut") { for (const f of resolvedFiles) await invoke("sftp_remove", { sessionId: clip.sshSessionId, path: f.path, isDir: f.is_dir }); }
+        if (clip.mode === "cut") { for (const f of resolvedFiles) await invoke("sftp_remove", { sessionId: clip.sftpSessionId, path: f.path, isDir: f.is_dir }); }
       } else if (srcType === "remote" && destType === "remote") {
-        if (clip.sshSessionId === sshSessionId && clip.mode === "cut") {
+        if (clip.sftpSessionId === sftpSessionId && clip.mode === "cut") {
           for (const f of resolvedFiles) {
             const dest = joinPath(currentPath, f.name);
-            await invoke("sftp_rename", { sessionId: sshSessionId, oldPath: f.path, newPath: dest });
+            await invoke("sftp_rename", { sessionId: sftpSessionId, oldPath: f.path, newPath: dest });
           }
         } else {
-          await invoke("sftp_cross_transfer", { srcSessionId: clip.sshSessionId, destSessionId: sshSessionId, srcPaths: resolvedFiles.map(f => f.path), srcIsDirs: resolvedFiles.map(f => f.is_dir), destNames: dn, destDir: currentPath });
-          if (clip.mode === "cut") { for (const f of resolvedFiles) await invoke("sftp_remove", { sessionId: clip.sshSessionId, path: f.path, isDir: f.is_dir }); }
+          await invoke("sftp_cross_transfer", { srcSessionId: clip.sftpSessionId, destSessionId: sftpSessionId, srcPaths: resolvedFiles.map(f => f.path), srcIsDirs: resolvedFiles.map(f => f.is_dir), destNames: dn, destDir: currentPath });
+          if (clip.mode === "cut") { for (const f of resolvedFiles) await invoke("sftp_remove", { sessionId: clip.sftpSessionId, path: f.path, isDir: f.is_dir }); }
         }
       }
       if (clip.mode === "cut") setClipboard(null);
       await listDir(currentPath);
     } catch (err) { setError(String(err)); }
     finally { setTransferOwnerPaneId(null); }
-  }, [pane.id, isRemote, sshSessionId, currentPath, listDir, checkConflicts]);
+  }, [pane.id, isRemote, sftpSessionId, currentPath, listDir, checkConflicts]);
 
   const doDeleteConfirmed = useCallback(async () => {
     if (deleteTargets.length === 0) return;
     try {
       for (const target of deleteTargets) {
-        if (isRemote && sshSessionId !== null) await invoke("sftp_remove", { sessionId: sshSessionId, path: target.path, isDir: target.is_dir });
+        if (isRemote && sftpSessionId !== null) await invoke("sftp_remove", { sessionId: sftpSessionId, path: target.path, isDir: target.is_dir });
         else await invoke("local_remove", { path: target.path, isDir: target.is_dir });
       }
       await listDir(currentPath);
     } catch (e) { setError(String(e)); }
     setDeleteTargets([]);
     setSelectedPaths(new Set());
-  }, [deleteTargets, isRemote, sshSessionId, currentPath, listDir]);
+  }, [deleteTargets, isRemote, sftpSessionId, currentPath, listDir]);
 
   const doRename = useCallback(async (oldPath: string, newName: string) => {
     const parts = oldPath.split("/");
@@ -495,12 +496,12 @@ export default function FileBrowser({ pane }: Props) {
     parts.pop();
     const newPath = [...parts, newName].join("/");
     try {
-      if (isRemote && sshSessionId !== null) await invoke("sftp_rename", { sessionId: sshSessionId, oldPath, newPath });
+      if (isRemote && sftpSessionId !== null) await invoke("sftp_rename", { sessionId: sftpSessionId, oldPath, newPath });
       else await invoke("local_rename", { oldPath, newPath });
       await listDir(currentPath);
     } catch (e) { setError(String(e)); }
     setRenaming(null);
-  }, [isRemote, sshSessionId, currentPath, listDir]);
+  }, [isRemote, sftpSessionId, currentPath, listDir]);
 
   const doCreate = useCallback(async () => {
     const name = createName.trim();
@@ -508,17 +509,17 @@ export default function FileBrowser({ pane }: Props) {
     const path = joinPath(currentPath, name);
     try {
       if (creating === "folder") {
-        if (isRemote && sshSessionId !== null) await invoke("sftp_mkdir", { sessionId: sshSessionId, path });
+        if (isRemote && sftpSessionId !== null) await invoke("sftp_mkdir", { sessionId: sftpSessionId, path });
         else await invoke("local_mkdir", { path });
       } else {
-        if (isRemote && sshSessionId !== null) await invoke("sftp_create_file", { sessionId: sshSessionId, path });
+        if (isRemote && sftpSessionId !== null) await invoke("sftp_create_file", { sessionId: sftpSessionId, path });
         else await invoke("local_write_file", { path, data: [] });
       }
       await listDir(currentPath);
     } catch (e) { setError(String(e)); }
     setCreating(null);
     setCreateName("");
-  }, [createName, creating, isRemote, sshSessionId, currentPath, listDir]);
+  }, [createName, creating, isRemote, sftpSessionId, currentPath, listDir]);
 
   const startCreate = useCallback((type: "file" | "folder") => {
     setCreating(type);
@@ -544,7 +545,7 @@ export default function FileBrowser({ pane }: Props) {
         const data = Array.from(new Uint8Array(reader.result as ArrayBuffer));
         const dest = joinPath(currentPath, file.name);
         try {
-          if (isRemote && sshSessionId !== null) await invoke("sftp_write_file", { sessionId: sshSessionId, path: dest, data });
+          if (isRemote && sftpSessionId !== null) await invoke("sftp_write_file", { sessionId: sftpSessionId, path: dest, data });
           else await invoke("local_write_file", { path: dest, data });
           await listDir(currentPath);
         } catch (err) { setError(String(err)); }
@@ -552,11 +553,11 @@ export default function FileBrowser({ pane }: Props) {
       reader.readAsArrayBuffer(file);
     }
     e.target.value = "";
-  }, [isRemote, sshSessionId, currentPath, listDir]);
+  }, [isRemote, sftpSessionId, currentPath, listDir]);
 
   const doDownload = useCallback(async (entry: FileEntry) => {
     try {
-      if (isRemote && sshSessionId !== null) {
+      if (isRemote && sftpSessionId !== null) {
         const destDir = await save({ defaultPath: entry.name, title: `Download ${entry.name}` });
         if (!destDir) return;
         setTransferOwnerPaneId(pane.id);
@@ -564,11 +565,11 @@ export default function FileBrowser({ pane }: Props) {
           const sep = lastSepIndex(destDir);
           if (entry.is_dir) {
             const parentDir = destDir.substring(0, sep);
-            await invoke("sftp_download", { sessionId: sshSessionId, remotePath: entry.path, localDir: parentDir, isDir: true });
+            await invoke("sftp_download", { sessionId: sftpSessionId, remotePath: entry.path, localDir: parentDir, isDir: true });
           } else {
             const localDir = destDir.substring(0, sep);
             const fileName = destDir.substring(sep + 1);
-            await invoke("sftp_download", { sessionId: sshSessionId, remotePath: entry.path, localDir, isDir: false });
+            await invoke("sftp_download", { sessionId: sftpSessionId, remotePath: entry.path, localDir, isDir: false });
             if (fileName !== entry.name) {
               await invoke("local_rename", { oldPath: joinPath(localDir, entry.name), newPath: destDir });
             }
@@ -576,7 +577,7 @@ export default function FileBrowser({ pane }: Props) {
         } finally { setTransferOwnerPaneId(null); }
       }
     } catch (e) { setError(String(e)); }
-  }, [isRemote, sshSessionId, pane.id]);
+  }, [isRemote, sftpSessionId, pane.id]);
 
   useEffect(() => { invoke<string>("get_platform").then(setPlatform).catch(() => {}); }, []);
 
@@ -589,9 +590,9 @@ export default function FileBrowser({ pane }: Props) {
   useEffect(() => {
     (async () => {
       try {
-        if (isRemote && sshSessionId !== null) {
-          await invoke("sftp_connect", { sessionId: sshSessionId });
-          const cwd = pane.sftpInitialPath || await invoke<string>("sftp_get_cwd", { sessionId: sshSessionId });
+        if (isRemote && sftpSessionId !== null) {
+          await invoke("sftp_connect", { sessionId: sftpSessionId, hostId });
+          const cwd = pane.sftpInitialPath || await invoke<string>("sftp_get_cwd", { sessionId: sftpSessionId });
           await listDir(cwd);
         } else {
           const cwd = pane.sftpInitialPath || await invoke<string>("local_get_cwd");
@@ -691,10 +692,10 @@ export default function FileBrowser({ pane }: Props) {
     startDrag({
       sourcePaneId: pane.id,
       sourceType: isRemote ? "remote" : "local",
-      sshSessionId,
+      sftpSessionId,
       files: dragFiles,
     }, e.clientX, e.clientY);
-  }, [pane.id, isRemote, sshSessionId, renaming, selectedPaths, entries]);
+  }, [pane.id, isRemote, sftpSessionId, renaming, selectedPaths, entries]);
 
   const onKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (renaming || creating || deleteTargets.length > 0) return;
@@ -858,7 +859,20 @@ export default function FileBrowser({ pane }: Props) {
         {error && (
           <div style={{ padding: 20, textAlign: "center", color: "#ef4444" }}>
             {error}<br />
-            <button onClick={() => listDir(currentPath)} style={{ ...breadcrumbBtn, color: "#4ecdc4", marginTop: 8 }}>Retry</button>
+            <button onClick={async () => {
+              setError(null);
+              setLoading(true);
+              try {
+                if (isRemote && sftpSessionId !== null) {
+                  await invoke("sftp_disconnect", { sessionId: sftpSessionId }).catch(() => {});
+                  await invoke("sftp_connect", { sessionId: sftpSessionId, hostId });
+                }
+                await listDir(currentPath);
+              } catch (e) {
+                setError(String(e));
+                setLoading(false);
+              }
+            }} style={{ ...breadcrumbBtn, color: "#4ecdc4", marginTop: 8 }}>Retry</button>
           </div>
         )}
         {!loading && !error && !isRoot(currentPath) && (
@@ -926,7 +940,7 @@ export default function FileBrowser({ pane }: Props) {
             })()}
           </span>
         )}
-        <span>{isRemote ? `Remote (SSH #${sshSessionId})` : "Local"}</span>
+        <span>{isRemote ? `Remote (SSH #${sftpSessionId})` : "Local"}</span>
         <span style={{ flex: 1, textAlign: "right", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{currentPath}</span>
       </div>
 

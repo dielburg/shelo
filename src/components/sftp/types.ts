@@ -25,7 +25,7 @@ export interface FileEntry {
 export interface DragPayload {
   sourcePaneId: number;
   sourceType: "local" | "remote";
-  sshSessionId: number | null;
+  sftpSessionId: number | null;
   files: { path: string; name: string; is_dir: boolean }[];
   isMove?: boolean;
 }
@@ -41,7 +41,7 @@ export interface PanelRegistration {
 export interface ClipboardData {
   mode: "copy" | "cut";
   sourceType: "local" | "remote";
-  sshSessionId: number | null;
+  sftpSessionId: number | null;
   files: { path: string; name: string; is_dir: boolean }[];
 }
 

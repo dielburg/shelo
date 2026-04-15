@@ -489,7 +489,14 @@ export default function TerminalPane({ sessionId, isFocused, isVisible, kind, ho
           onClick={() => setCtxMenu(null)}
           onContextMenu={(e) => { e.preventDefault(); setCtxMenu(null); }}
         />
-        <div style={{
+        <div ref={el => {
+          if (!el) return;
+          const rect = el.getBoundingClientRect();
+          const maxX = window.innerWidth - rect.width - 4;
+          const maxY = window.innerHeight - rect.height - 4;
+          if (ctxMenu.x > maxX) el.style.left = `${maxX}px`;
+          if (ctxMenu.y > maxY) el.style.top = `${maxY}px`;
+        }} style={{
           position: "fixed", left: ctxMenu.x, top: ctxMenu.y,
           background: "#1a1f2e", border: "1px solid #2a3050", borderRadius: 6,
           padding: "4px 0", zIndex: 9999, minWidth: 160,

@@ -106,9 +106,9 @@ export default function App() {
     const pane = workspace.state.panes.get(paneId);
     if (!pane) return;
 
-    const isRemote = pane.kind === "ssh";
+    const isRemote = pane.kind === "ssh" && pane.hostId != null;
     const source = isRemote
-      ? { type: "remote" as const, sshSessionId: pane.sessionId }
+      ? { type: "remote" as const, hostId: pane.hostId! }
       : { type: "local" as const };
     const label = isRemote ? `SFTP: ${pane.name}` : "Files";
 

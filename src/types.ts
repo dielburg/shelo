@@ -5,7 +5,7 @@ export interface Pane {
   defaultName: string;
   sessionId: number;
   hostId?: number;
-  sftpSource?: { type: "local" } | { type: "remote"; sshSessionId: number };
+  sftpSource?: { type: "local" } | { type: "remote"; hostId: number };
   sftpInitialPath?: string;
 }
 

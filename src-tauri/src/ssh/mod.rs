@@ -97,28 +97,196 @@ impl SshState {
         }
     }
 
-    pub async fn open_sftp_channel(&self, session_id: u32) -> Result<russh::Channel<client::Msg>, String> {
-        let ssh_handle_arc = {
-            let handles = self.handles.lock().await;
-            let handle = handles
-                .get(&session_id)
-                .ok_or_else(|| format!("SSH session {} not found", session_id))?;
-            handle.ssh_handle.clone()
+    pub(crate) async fn connect_to_host(
+        &self,
+        session_id: u32,
+        host_id: u32,
+        app: &AppHandle,
+    ) -> Result<SshConnection, String> {
+        let hosts_state = app.state::<HostsState>();
+        let store_guard = hosts_state.store.lock().await;
+        let all_hosts = store_guard
+            .as_ref()
+            .ok_or("Vault is locked")?
+            .list()?;
+        drop(store_guard);
+
+        let host = all_hosts
+            .iter()
+            .find(|h| h.id == host_id)
+            .ok_or_else(|| format!("Host {} not found", host_id))?;
+
+        let hops = resolve_full_hop_chain(host_id, &all_hosts, &mut vec![])
+            .map_err(|e| format!("Failed to resolve jump path: {}", e))?;
+
+        let destination = HopInfo {
+            hostname: host.hostname.clone(),
+            port: host.port,
+            username: host.username.clone(),
+            password: host.password.clone().unwrap_or_default(),
+            label: host.label.clone(),
         };
 
-        let ssh_handle = ssh_handle_arc.lock().await;
+        if hops.is_empty() {
+            self.direct_connect_raw(session_id, &destination, app).await
+        } else {
+            self.jump_connect_raw(session_id, hops, destination, app).await
+        }
+    }
 
-        let channel = ssh_handle
+    async fn direct_connect_raw(
+        &self,
+        session_id: u32,
+        destination: &HopInfo,
+        app: &AppHandle,
+    ) -> Result<SshConnection, String> {
+        info!(session_id, host = %destination.hostname, port = destination.port, "SFTP direct SSH connect");
+
+        let config = make_ssh_config();
+        let (key_tx, key_rx) = oneshot::channel::<PublicKey>();
+        let handler = SshClientHandler { host_key_tx: Some(key_tx) };
+
+        let addr = format!("{}:{}", destination.hostname, destination.port);
+        let mut handle = timeout(CONNECT_TIMEOUT, client::connect(config, &addr, handler))
+            .await
+            .map_err(|_| format!("Connection timed out after {}s", CONNECT_TIMEOUT.as_secs()))?
+            .map_err(|e| format!("Connection failed: {}", e))?;
+
+        ssh_authenticate_and_verify(
+            session_id, &mut handle, key_rx,
+            &destination.hostname, destination.port,
+            &destination.username, &destination.password,
+            &self.known_hosts, &self.pending_verifications,
+            app, None,
+        ).await?;
+
+        Ok(SshConnection {
+            handle: Arc::new(tokio::sync::Mutex::new(handle)),
+            _keepalive: None,
+        })
+    }
+
+    async fn jump_connect_raw(
+        &self,
+        session_id: u32,
+        hops: Vec<HopInfo>,
+        destination: HopInfo,
+        app: &AppHandle,
+    ) -> Result<SshConnection, String> {
+        let total_hops = hops.len() as u32;
+        info!(session_id, total_hops, destination = %destination.hostname, "SFTP jump SSH connect");
+
+        let first_hop = &hops[0];
+        let config = make_ssh_config();
+        let (key_tx, key_rx) = oneshot::channel::<PublicKey>();
+        let handler = SshClientHandler { host_key_tx: Some(key_tx) };
+
+        let addr = format!("{}:{}", first_hop.hostname, first_hop.port);
+        let mut current_handle = timeout(CONNECT_TIMEOUT, client::connect(config, &addr, handler))
+            .await
+            .map_err(|_| format!("Hop 1/{}: Connection to {} timed out", total_hops, first_hop.label))?
+            .map_err(|e| format!("Hop 1/{}: Connection to {} failed: {}", total_hops, first_hop.label, e))?;
+
+        ssh_authenticate_and_verify(
+            session_id, &mut current_handle, key_rx,
+            &first_hop.hostname, first_hop.port,
+            &first_hop.username, &first_hop.password,
+            &self.known_hosts, &self.pending_verifications,
+            app, Some((1, total_hops, &first_hop.label)),
+        ).await?;
+
+        let mut intermediate_handles: Vec<client::Handle<SshClientHandler>> = Vec::new();
+
+        for (i, hop) in hops.iter().enumerate().skip(1) {
+            let hop_num = (i + 1) as u32;
+
+            let tunnel_channel = timeout(
+                CONNECT_TIMEOUT,
+                current_handle.channel_open_direct_tcpip(&hop.hostname, hop.port as u32, "127.0.0.1", 0),
+            )
+            .await
+            .map_err(|_| format!("Hop {}/{}: Tunnel to {} timed out", hop_num, total_hops, hop.label))?
+            .map_err(|e| format!("Hop {}/{}: Tunnel to {} failed: {}", hop_num, total_hops, hop.label, e))?;
+
+            let stream = tunnel_channel.into_stream();
+            let config = make_ssh_config();
+            let (key_tx, key_rx) = oneshot::channel::<PublicKey>();
+            let handler = SshClientHandler { host_key_tx: Some(key_tx) };
+
+            let mut new_handle = timeout(CONNECT_TIMEOUT, client::connect_stream(config, stream, handler))
+                .await
+                .map_err(|_| format!("Hop {}/{}: SSH to {} timed out", hop_num, total_hops, hop.label))?
+                .map_err(|e| format!("Hop {}/{}: SSH to {} failed: {}", hop_num, total_hops, hop.label, e))?;
+
+            ssh_authenticate_and_verify(
+                session_id, &mut new_handle, key_rx,
+                &hop.hostname, hop.port,
+                &hop.username, &hop.password,
+                &self.known_hosts, &self.pending_verifications,
+                app, Some((hop_num, total_hops, &hop.label)),
+            ).await?;
+
+            intermediate_handles.push(current_handle);
+            current_handle = new_handle;
+        }
+
+        let tunnel_channel = timeout(
+            CONNECT_TIMEOUT,
+            current_handle.channel_open_direct_tcpip(&destination.hostname, destination.port as u32, "127.0.0.1", 0),
+        )
+        .await
+        .map_err(|_| format!("Tunnel to destination {} timed out", destination.label))?
+        .map_err(|e| format!("Tunnel to destination {} failed: {}", destination.label, e))?;
+
+        let stream = tunnel_channel.into_stream();
+        let config = make_ssh_config();
+        let (key_tx, key_rx) = oneshot::channel::<PublicKey>();
+        let handler = SshClientHandler { host_key_tx: Some(key_tx) };
+
+        let mut dest_handle = timeout(CONNECT_TIMEOUT, client::connect_stream(config, stream, handler))
+            .await
+            .map_err(|_| format!("SSH to destination {} timed out", destination.label))?
+            .map_err(|e| format!("SSH to destination {} failed: {}", destination.label, e))?;
+
+        intermediate_handles.push(current_handle);
+
+        ssh_authenticate_and_verify(
+            session_id, &mut dest_handle, key_rx,
+            &destination.hostname, destination.port,
+            &destination.username, &destination.password,
+            &self.known_hosts, &self.pending_verifications,
+            app, None,
+        ).await?;
+
+        let (keepalive_tx, keepalive_rx) = oneshot::channel::<()>();
+        tokio::spawn(async move {
+            let _handles = intermediate_handles;
+            let _ = keepalive_rx.await;
+        });
+
+        Ok(SshConnection {
+            handle: Arc::new(tokio::sync::Mutex::new(dest_handle)),
+            _keepalive: Some(keepalive_tx),
+        })
+    }
+}
+
+pub(crate) struct SshConnection {
+    handle: Arc<tokio::sync::Mutex<client::Handle<SshClientHandler>>>,
+    _keepalive: Option<oneshot::Sender<()>>,
+}
+
+impl SshConnection {
+    pub(crate) async fn open_sftp_channel(&self) -> Result<russh::Channel<client::Msg>, String> {
+        let handle = self.handle.lock().await;
+        let channel = handle
             .channel_open_session()
             .await
             .map_err(|e| format!("Failed to open SFTP channel: {}", e))?;
-
         channel
             .request_subsystem(true, "sftp")
             .await
             .map_err(|e| format!("Failed to request SFTP subsystem: {}", e))?;
-
-        debug!(session_id, "SFTP channel opened");
         Ok(channel)
     }
 }
@@ -147,6 +315,45 @@ impl client::Handler for SshClientHandler {
 
 fn emit_status(app: &AppHandle, status: SshStatus) {
     let _ = app.emit("ssh-status", status);
+}
+
+fn resolve_full_hop_chain(
+    host_id: u32,
+    all_hosts: &[crate::hosts::store::HostEntry],
+    visited: &mut Vec<u32>,
+) -> Result<Vec<HopInfo>, String> {
+    if visited.contains(&host_id) {
+        return Err(format!("Circular jump path detected at host {}", host_id));
+    }
+    visited.push(host_id);
+
+    let host = all_hosts
+        .iter()
+        .find(|h| h.id == host_id)
+        .ok_or_else(|| format!("Jump host {} not found", host_id))?;
+
+    let mut chain: Vec<HopInfo> = Vec::new();
+
+    if let Some(ref jump_path) = host.jump_path {
+        for &hop_id in jump_path {
+            let sub_chain = resolve_full_hop_chain(hop_id, all_hosts, visited)?;
+            chain.extend(sub_chain);
+            let hop_host = all_hosts
+                .iter()
+                .find(|h| h.id == hop_id)
+                .ok_or_else(|| format!("Jump host {} not found", hop_id))?;
+            chain.push(HopInfo {
+                hostname: hop_host.hostname.clone(),
+                port: hop_host.port,
+                username: hop_host.username.clone(),
+                password: hop_host.password.clone().unwrap_or_default(),
+                label: hop_host.label.clone(),
+            });
+        }
+    }
+
+    visited.pop();
+    Ok(chain)
 }
 
 struct HopInfo {
@@ -192,22 +399,10 @@ pub async fn create_ssh_session(
         .find(|h| h.id == host_id)
         .ok_or_else(|| format!("Host {} not found", host_id))?;
 
-    let mut hops: Vec<HopInfo> = Vec::new();
+    let hops = resolve_full_hop_chain(host_id, &all_hosts, &mut vec![])
+        .map_err(|e| format!("Failed to resolve jump path: {}", e))?;
 
-    if let Some(ref jump_path) = host.jump_path {
-        for hop_id in jump_path {
-            let hop_host = all_hosts
-                .iter()
-                .find(|h| h.id == *hop_id)
-                .ok_or_else(|| format!("Jump host {} not found", hop_id))?;
-            hops.push(HopInfo {
-                hostname: hop_host.hostname.clone(),
-                port: hop_host.port,
-                username: hop_host.username.clone(),
-                password: hop_host.password.clone().unwrap_or_default(),
-                label: hop_host.label.clone(),
-            });
-        }
+    if !hops.is_empty() {
         info!(session_id, hops = hops.len(), "SSH connection with jump path");
     }
 
