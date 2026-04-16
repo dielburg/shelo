@@ -181,7 +181,9 @@ function HostListView({ hosts, onAdd, onEdit, onDelete, onConnect }: {
   onConnect?: (h: Host) => void;
 }) {
   const [search, setSearch] = useState("");
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [collapsed, setCollapsed] = useState<Set<string>>(
+    () => new Set(JSON.parse(localStorage.getItem("collapsed-groups") ?? "[]"))
+  );
   const preSearchCollapsed = useRef<Set<string> | null>(null);
 
   const handleSearchChange = (value: string) => {
@@ -198,6 +200,7 @@ function HostListView({ hosts, onAdd, onEdit, onDelete, onConnect }: {
     setCollapsed(prev => {
       const next = new Set(prev);
       next.has(group) ? next.delete(group) : next.add(group);
+      localStorage.setItem("collapsed-groups", JSON.stringify([...next]));
       return next;
     });
   };
