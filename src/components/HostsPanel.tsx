@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { IconHosts, IconPlus } from "./icons";
 import WindowControls from "./WindowControls";
@@ -181,6 +181,26 @@ function HostListView({ hosts, onAdd, onEdit, onDelete, onConnect }: {
   onConnect?: (h: Host) => void;
 }) {
   const [search, setSearch] = useState("");
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const preSearchCollapsed = useRef<Set<string> | null>(null);
+
+  const handleSearchChange = (value: string) => {
+    if (value.trim() && !preSearchCollapsed.current) {
+      preSearchCollapsed.current = new Set(collapsed);
+    } else if (!value.trim() && preSearchCollapsed.current) {
+      setCollapsed(preSearchCollapsed.current);
+      preSearchCollapsed.current = null;
+    }
+    setSearch(value);
+  };
+
+  const toggleGroup = (group: string) => {
+    setCollapsed(prev => {
+      const next = new Set(prev);
+      next.has(group) ? next.delete(group) : next.add(group);
+      return next;
+    });
+  };
 
   const filtered = search.trim()
     ? hosts.filter(h => {
@@ -208,7 +228,7 @@ function HostListView({ hosts, onAdd, onEdit, onDelete, onConnect }: {
           style={{ ...inputStyle, marginBottom: 16 }}
           placeholder="Search by name or hostname..."
           value={search}
-          onChange={e => setSearch(e.target.value)}
+          onChange={e => handleSearchChange(e.target.value)}
         />
       )}
 
@@ -226,7 +246,7 @@ function HostListView({ hosts, onAdd, onEdit, onDelete, onConnect }: {
           No hosts matching "{search}"
         </div>
       ) : (
-        <HostList hosts={filtered} onEdit={onEdit} onDelete={onDelete} onConnect={onConnect} />
+        <HostList hosts={filtered} onEdit={onEdit} onDelete={onDelete} onConnect={onConnect} collapsed={collapsed} onToggleGroup={toggleGroup} searchActive={!!search.trim()} />
       )}
     </>
   );
@@ -650,14 +670,15 @@ function AddHopPicker({ hosts, onAdd }: { hosts: Host[]; onAdd: (id: number) => 
   );
 }
 
-function HostList({ hosts, onEdit, onDelete, onConnect }: {
+function HostList({ hosts, onEdit, onDelete, onConnect, collapsed, onToggleGroup, searchActive }: {
   hosts: Host[];
   onEdit: (h: Host) => void;
   onDelete: (id: number) => void;
   onConnect?: (h: Host) => void;
+  collapsed: Set<string>;
+  onToggleGroup: (group: string) => void;
+  searchActive?: boolean;
 }) {
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-
   const groups = new Map<string, Host[]>();
   for (const host of hosts) {
     const g = host.group;
@@ -671,20 +692,12 @@ function HostList({ hosts, onEdit, onDelete, onConnect }: {
     return a.localeCompare(b);
   });
 
-  const toggleGroup = (group: string) => {
-    setCollapsed(prev => {
-      const next = new Set(prev);
-      next.has(group) ? next.delete(group) : next.add(group);
-      return next;
-    });
-  };
-
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       {sortedGroups.map(([group, groupHosts]) => (
         <div key={group}>
           <div
-            onClick={() => toggleGroup(group)}
+            onClick={() => onToggleGroup(group)}
             style={{
               fontSize: 9, color: "#4a5568", fontWeight: 700,
               letterSpacing: "0.08em", textTransform: "uppercase",
@@ -699,7 +712,7 @@ function HostList({ hosts, onEdit, onDelete, onConnect }: {
             }}>▾</span>
             {group} · {groupHosts.length}
           </div>
-          {!collapsed.has(group) && (
+          {(!collapsed.has(group) || searchActive) && (
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
               {groupHosts.map(host => (
                 <HostRow key={host.id} host={host} onEdit={onEdit} onDelete={onDelete} onConnect={onConnect} />
