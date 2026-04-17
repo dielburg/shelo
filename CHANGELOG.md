@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.3.0
+
+SSH port forwarding tunnels, host group persistence, and bug fixes.
+
+### Features
+
+- Local and remote SSH port forwarding tunnels with full lifecycle management
+- Tunnel cards with Start/Stop controls, connecting animation, and error display
+- Interactive host key verification dialog for tunnel SSH connections
+- SSH connection health monitoring for active tunnels with automatic status updates
+- Active tunnel counter badge on Tunnels sidebar button (green/red by status)
+- Collapsed host groups now persist across app restarts
+
+### Bug Fixes
+
+- SFTP now maintains an independent SSH connection — closing the terminal no longer disconnects the file browser
+- SFTP retry reconnects properly after a dropped connection instead of reusing the dead session
+- Fixed SSH and SFTP jump host chains not resolving recursively — connecting to host C via B (which itself requires A) now correctly routes through A → B → C
+- Fixed context menu appearing outside the visible area when right-clicking near the bottom or right edge of the window (terminal and SFTP panels)
+- Fixed host search not showing results when the matching host's group was collapsed
+
+
 ## v0.3.0-2
 
 Bug fixes for SFTP, SSH jump hosts, and context menu.
