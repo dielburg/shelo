@@ -10,12 +10,15 @@ A free, cross-platform terminal and SSH client inspired by [Termius](https://ter
 
 The goal behind shelo is simple — I love Termius and its UI approach to terminal management, but wanted a free and open-source alternative that feels just as good. If you've ever wished for a Termius-like experience without the price tag, this is for you.
 
+![SFTP file browser alongside SSH terminal](images/ss1.png)
+
 ## Features
 
 - **Multi-panel terminal** — split horizontally and vertically, drag and drop panes between tabs
 - **SSH client** — connect to remote servers with password authentication and multi-hop jump host support
 - **SFTP file browser** — dual-panel local/remote file management with drag-and-drop transfers, conflict resolution, permissions editor, and keyboard navigation
 - **Encrypted vault** — store your host credentials securely with AES-256-GCM encryption and Argon2id key derivation, or unlock automatically via system keychain
+- **SSH tunnels** — local and remote port forwarding over SSH, with one-click start/stop and visual connection status
 - **Hosts management** — organize connections into groups, one-click connect
 - **Workspaces & tabs** — multiple workspaces with reorderable tabs and flexible pane layouts
 - **Cross-platform** — runs on macOS, Windows, and Linux with native look and feel
@@ -65,3 +68,11 @@ npm run tauri build
 ```
 
 The production build output will be in `src-tauri/target/release/bundle/`.
+
+## Screenshots
+
+![SFTP file browser alongside SSH terminal](images/ss1.png)
+*Dual-panel SFTP file browser alongside an SSH terminal session*
+
+![SSH tunnel configuration](images/ss2.png)
+*SSH tunnel configuration with local and remote port forwarding*
