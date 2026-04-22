@@ -55,8 +55,15 @@ export default function TerminalPane({ sessionId, isFocused, isVisible, kind, ho
   const [reconnectRetryLimit, setReconnectRetryLimit] = useState(3);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [retryAttempt, setRetryAttempt] = useState(0);
-  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const countdownRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const settingsLoaded = useRef(false);
+
+  const autoReconnectRef = useRef(autoReconnect);
+  autoReconnectRef.current = autoReconnect;
+  const reconnectRetryLimitRef = useRef(reconnectRetryLimit);
+  reconnectRetryLimitRef.current = reconnectRetryLimit;
+  const retryAttemptRef = useRef(retryAttempt);
+  retryAttemptRef.current = retryAttempt;
 
   const showToast = useCallback((msg: string) => {
     if (toastTimer.current) clearTimeout(toastTimer.current);
@@ -79,7 +86,7 @@ export default function TerminalPane({ sessionId, isFocused, isVisible, kind, ho
 
   const clearCountdown = useCallback(() => {
     if (countdownRef.current) {
-      clearInterval(countdownRef.current);
+      clearTimeout(countdownRef.current);
       countdownRef.current = null;
     }
     setCountdown(null);
@@ -168,11 +175,16 @@ export default function TerminalPane({ sessionId, isFocused, isVisible, kind, ho
 
     invoke("create_ssh_session", createArgs).catch((err) => {
       setSshStages(prev => [...prev, { stage: "error", message: String(err) }]);
+      setSshDisconnected(true);
     });
   }, [sessionId, hostId]);
 
+  const startConnectionRef = useRef(startConnection);
+  startConnectionRef.current = startConnection;
+
   const handleReconnect = useCallback(() => {
     clearCountdown();
+    setRetryAttempt(0);
     const term = termRef.current;
     if (term) {
       term.clear();
@@ -188,35 +200,37 @@ export default function TerminalPane({ sessionId, isFocused, isVisible, kind, ho
 
   useEffect(() => {
     if (!sshDisconnected || !autoReconnect) return;
-    if (reconnectRetryLimit > 0 && retryAttempt >= reconnectRetryLimit) return;
+    if (reconnectRetryLimitRef.current > 0 && retryAttemptRef.current >= reconnectRetryLimitRef.current) return;
 
-    const attempt = retryAttempt + 1;
-    setRetryAttempt(attempt);
-    setCountdown(5);
+    setRetryAttempt(prev => prev + 1);
 
-    const interval = setInterval(() => {
-      setCountdown(prev => {
-        if (prev === null || prev <= 1) {
-          clearInterval(interval);
-          countdownRef.current = null;
-          const term = termRef.current;
-          if (term) term.clear();
-          startConnection();
-          return null;
-        }
-        return prev - 1;
-      });
-    }, 1000);
+    let remaining = 5;
+    setCountdown(remaining);
 
-    countdownRef.current = interval;
+    const tick = () => {
+      remaining -= 1;
+      if (remaining <= 0) {
+        countdownRef.current = null;
+        setCountdown(null);
+        const term = termRef.current;
+        if (term) term.clear();
+        startConnectionRef.current();
+        return;
+      }
+      setCountdown(remaining);
+      countdownRef.current = setTimeout(tick, 1000);
+    };
+
+    countdownRef.current = setTimeout(tick, 1000);
 
     return () => {
-      clearInterval(interval);
-      if (countdownRef.current === interval) {
+      if (countdownRef.current) {
+        clearTimeout(countdownRef.current);
         countdownRef.current = null;
       }
+      setCountdown(null);
     };
-  }, [sshDisconnected]);
+  }, [sshDisconnected, autoReconnect]);
 
   useEffect(() => {
     if (sshConnected && !sshDisconnected) {
@@ -373,7 +387,7 @@ export default function TerminalPane({ sessionId, isFocused, isVisible, kind, ho
                 try { fitAddon.fit(); } catch {}
                 term.focus();
               });
-            } else if (event.payload.stage === "disconnected") {
+            } else if (event.payload.stage === "disconnected" || event.payload.stage === "error") {
               setSshDisconnected(true);
             }
           }
@@ -536,7 +550,7 @@ export default function TerminalPane({ sessionId, isFocused, isVisible, kind, ho
         <div style={{ position: "absolute", inset: 0, background: sshDisconnected ? "rgba(11, 13, 18, 0.85)" : undefined }}>
           <ConnectionScreen
             sessionId={sessionId}
-            stages={sshDisconnected ? sshStages.filter(s => s.stage === "disconnected") : sshStages}
+            stages={sshDisconnected ? sshStages.filter(s => s.stage === "disconnected" || s.stage === "error") : sshStages}
             onClose={handleClose}
             onReconnect={handleReconnect}
             autoReconnect={autoReconnect}
