@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.3.1
+
+Bug fixes for SSH auto-reconnect.
+
+### Bug Fixes
+
+- Fixed SSH auto-reconnect not triggering when the initial connection fails (e.g. no route to host, connection refused) — the countdown now starts correctly regardless of whether the error comes from the network layer or an established session drop
+- Fixed auto-reconnect countdown not starting when the toggle is enabled after a disconnect has already occurred
+- Fixed "Reconnect now" button not resetting the retry counter, which could permanently block further reconnect attempts after exhausting the limit
+- Fixed reconnect logic calling side effects inside a React state updater function, which could cause double connection attempts in strict mode
+
+
 ## v0.3.0
 
 SSH port forwarding tunnels, host group persistence, and bug fixes.
