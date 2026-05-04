@@ -13,7 +13,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::hosts::HostsState;
 use crate::ssh::known_hosts::{HostKeyStatus, KnownHostsStore};
-use crate::ssh::{make_ssh_config, ssh_fingerprint, SshState};
+use crate::ssh::{make_ssh_config, resolve_full_hop_chain, ssh_fingerprint, HopInfo, SshState};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const AUTH_TIMEOUT: Duration = Duration::from_secs(30);
@@ -143,7 +143,14 @@ pub async fn start_tunnel(tunnel_id: u32, app: AppHandle) -> Result<(), String> 
         .ok_or_else(|| format!("Host {} not found", tunnel.host_id))?
         .clone();
 
+    let hops = resolve_full_hop_chain(tunnel.host_id, &hosts, &mut vec![])
+        .map_err(|e| format!("Failed to resolve jump path: {}", e))?;
+
     drop(store_guard);
+
+    if !hops.is_empty() {
+        info!(tunnel_id, hops = hops.len(), "Tunnel will connect via jump hosts");
+    }
 
     let ssh_state = app.state::<SshState>();
     let known_hosts = ssh_state.known_hosts.clone();
@@ -171,6 +178,7 @@ pub async fn start_tunnel(tunnel_id: u32, app: AppHandle) -> Result<(), String> 
             tunnel.source_port,
             &tunnel.destination_host,
             tunnel.destination_port,
+            hops,
             known_hosts,
             pending_ref,
             shutdown_rx,
@@ -240,6 +248,7 @@ async fn run_tunnel(
     source_port: u16,
     dest_host: &str,
     dest_port: u16,
+    hops: Vec<HopInfo>,
     known_hosts: Arc<Mutex<KnownHostsStore>>,
     pending_verifications: Arc<Mutex<HashMap<u32, PendingKeyVerification>>>,
     shutdown_rx: oneshot::Receiver<()>,
@@ -252,18 +261,18 @@ async fn run_tunnel(
         (None, None)
     };
 
-    let handle = establish_ssh(
-        tunnel_id,
-        hostname,
-        port,
-        username,
-        password,
-        &known_hosts,
-        &pending_verifications,
-        forwarded_tx,
-        app,
-    )
-    .await?;
+    let (handle, _keepalive) = if hops.is_empty() {
+        (establish_ssh(
+            tunnel_id, hostname, port, username, password,
+            &known_hosts, &pending_verifications, forwarded_tx, app,
+        ).await?, None)
+    } else {
+        let (h, k) = establish_ssh_via_jumps(
+            tunnel_id, hops, hostname, port, username, password,
+            &known_hosts, &pending_verifications, forwarded_tx, app,
+        ).await?;
+        (h, Some(k))
+    };
 
     info!(tunnel_id, tunnel_type, "SSH connected, starting tunnel");
 
@@ -290,37 +299,18 @@ async fn run_tunnel(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn establish_ssh(
+async fn verify_and_auth_tunnel_hop(
     tunnel_id: u32,
+    handle: &mut client::Handle<TunnelHandler>,
+    key_rx: oneshot::Receiver<PublicKey>,
     hostname: &str,
     port: u16,
     username: &str,
     password: &str,
     known_hosts: &Arc<Mutex<KnownHostsStore>>,
     pending_verifications: &Arc<Mutex<HashMap<u32, PendingKeyVerification>>>,
-    forwarded_tx: Option<mpsc::UnboundedSender<russh::Channel<client::Msg>>>,
     app: &AppHandle,
-) -> Result<client::Handle<TunnelHandler>, String> {
-    emit_tunnel_status(
-        app,
-        tunnel_id,
-        "connecting",
-        Some(format!("Connecting to {}:{}...", hostname, port)),
-    );
-
-    let config = make_ssh_config();
-    let (key_tx, key_rx) = oneshot::channel::<PublicKey>();
-    let handler = TunnelHandler {
-        host_key_tx: Some(key_tx),
-        forwarded_tx,
-    };
-
-    let addr = format!("{}:{}", hostname, port);
-    let mut handle = timeout(CONNECT_TIMEOUT, client::connect(config, &addr, handler))
-        .await
-        .map_err(|_| format!("Connection timed out after {}s", CONNECT_TIMEOUT.as_secs()))?
-        .map_err(|e| format!("Connection failed: {}", e))?;
-
+) -> Result<(), String> {
     let server_key = timeout(CONNECT_TIMEOUT, key_rx)
         .await
         .map_err(|_| "Timed out waiting for server key".to_string())?
@@ -338,7 +328,7 @@ async fn establish_ssh(
             debug!(tunnel_id, hostname, "Host key verified");
         }
         HostKeyStatus::Unknown => {
-            info!(tunnel_id, hostname, "Unknown host key for tunnel, requesting user verification");
+            info!(tunnel_id, hostname, "Unknown host key, requesting user verification");
             emit_host_verify(app, TunnelHostVerifyEvent {
                 tunnel_id,
                 stage: "unknown".to_string(),
@@ -354,11 +344,9 @@ async fn establish_ssh(
                 p.insert(tunnel_id, PendingKeyVerification { respond: resp_tx });
             }
 
-            let accepted = resp_rx
-                .await
-                .map_err(|_| "Verification cancelled".to_string())?;
+            let accepted = resp_rx.await.map_err(|_| "Verification cancelled".to_string())?;
             if !accepted {
-                warn!(tunnel_id, hostname, "Tunnel host key rejected by user");
+                warn!(tunnel_id, hostname, "Host key rejected by user");
                 return Err("Host key rejected by user".to_string());
             }
 
@@ -366,10 +354,10 @@ async fn establish_ssh(
                 let store = known_hosts.lock().await;
                 store.add(hostname, port, &fingerprint)?;
             }
-            info!(tunnel_id, hostname, "Tunnel host key trusted and saved");
+            info!(tunnel_id, hostname, "Host key trusted and saved");
         }
         HostKeyStatus::Changed { expected } => {
-            warn!(tunnel_id, hostname, "Host key CHANGED for tunnel");
+            warn!(tunnel_id, hostname, "Host key CHANGED");
             emit_host_verify(app, TunnelHostVerifyEvent {
                 tunnel_id,
                 stage: "changed".to_string(),
@@ -385,11 +373,9 @@ async fn establish_ssh(
                 p.insert(tunnel_id, PendingKeyVerification { respond: resp_tx });
             }
 
-            let accepted = resp_rx
-                .await
-                .map_err(|_| "Verification cancelled".to_string())?;
+            let accepted = resp_rx.await.map_err(|_| "Verification cancelled".to_string())?;
             if !accepted {
-                warn!(tunnel_id, hostname, "Changed tunnel host key rejected by user");
+                warn!(tunnel_id, hostname, "Changed host key rejected by user");
                 return Err("Host key rejected by user".to_string());
             }
 
@@ -398,7 +384,7 @@ async fn establish_ssh(
                 store.remove(hostname, port);
                 store.add(hostname, port, &fingerprint)?;
             }
-            info!(tunnel_id, hostname, "Changed tunnel host key accepted and updated");
+            info!(tunnel_id, hostname, "Changed host key accepted and updated");
         }
     }
 
@@ -409,14 +395,155 @@ async fn establish_ssh(
 
     match auth_result {
         russh::client::AuthResult::Success => {
-            info!(tunnel_id, hostname, username, "Tunnel SSH authenticated");
+            info!(tunnel_id, hostname, username, "SSH authenticated");
+            Ok(())
         }
         russh::client::AuthResult::Failure { .. } => {
-            return Err("Authentication failed: wrong credentials".to_string());
+            Err("Authentication failed: wrong credentials".to_string())
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn establish_ssh(
+    tunnel_id: u32,
+    hostname: &str,
+    port: u16,
+    username: &str,
+    password: &str,
+    known_hosts: &Arc<Mutex<KnownHostsStore>>,
+    pending_verifications: &Arc<Mutex<HashMap<u32, PendingKeyVerification>>>,
+    forwarded_tx: Option<mpsc::UnboundedSender<russh::Channel<client::Msg>>>,
+    app: &AppHandle,
+) -> Result<client::Handle<TunnelHandler>, String> {
+    emit_tunnel_status(app, tunnel_id, "connecting", Some(format!("Connecting to {}:{}...", hostname, port)));
+
+    let config = make_ssh_config();
+    let (key_tx, key_rx) = oneshot::channel::<PublicKey>();
+    let handler = TunnelHandler { host_key_tx: Some(key_tx), forwarded_tx };
+
+    let addr = format!("{}:{}", hostname, port);
+    let mut handle = timeout(CONNECT_TIMEOUT, client::connect(config, &addr, handler))
+        .await
+        .map_err(|_| format!("Connection timed out after {}s", CONNECT_TIMEOUT.as_secs()))?
+        .map_err(|e| format!("Connection failed: {}", e))?;
+
+    verify_and_auth_tunnel_hop(
+        tunnel_id, &mut handle, key_rx,
+        hostname, port, username, password,
+        known_hosts, pending_verifications, app,
+    ).await?;
 
     Ok(handle)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn establish_ssh_via_jumps(
+    tunnel_id: u32,
+    hops: Vec<HopInfo>,
+    hostname: &str,
+    port: u16,
+    username: &str,
+    password: &str,
+    known_hosts: &Arc<Mutex<KnownHostsStore>>,
+    pending_verifications: &Arc<Mutex<HashMap<u32, PendingKeyVerification>>>,
+    forwarded_tx: Option<mpsc::UnboundedSender<russh::Channel<client::Msg>>>,
+    app: &AppHandle,
+) -> Result<(client::Handle<TunnelHandler>, oneshot::Sender<()>), String> {
+    let total_hops = hops.len() as u32;
+    let first_hop = &hops[0];
+
+    emit_tunnel_status(app, tunnel_id, "connecting",
+        Some(format!("Connecting via {} (hop 1/{})...", first_hop.label, total_hops)));
+
+    let config = make_ssh_config();
+    let (key_tx, key_rx) = oneshot::channel::<PublicKey>();
+    let handler = TunnelHandler { host_key_tx: Some(key_tx), forwarded_tx: None };
+
+    let addr = format!("{}:{}", first_hop.hostname, first_hop.port);
+    let mut current_handle = timeout(CONNECT_TIMEOUT, client::connect(config, &addr, handler))
+        .await
+        .map_err(|_| format!("Hop 1/{}: Connection to {} timed out", total_hops, first_hop.label))?
+        .map_err(|e| format!("Hop 1/{}: Connection to {} failed: {}", total_hops, first_hop.label, e))?;
+
+    verify_and_auth_tunnel_hop(
+        tunnel_id, &mut current_handle, key_rx,
+        &first_hop.hostname, first_hop.port, &first_hop.username, &first_hop.password,
+        known_hosts, pending_verifications, app,
+    ).await?;
+
+    let mut intermediate_handles: Vec<client::Handle<TunnelHandler>> = Vec::new();
+
+    for (i, hop) in hops.iter().enumerate().skip(1) {
+        let hop_num = (i + 1) as u32;
+
+        emit_tunnel_status(app, tunnel_id, "connecting",
+            Some(format!("Connecting via {} (hop {}/{})...", hop.label, hop_num, total_hops)));
+
+        let channel = timeout(
+            CONNECT_TIMEOUT,
+            current_handle.channel_open_direct_tcpip(&hop.hostname, hop.port as u32, "127.0.0.1", 0),
+        )
+        .await
+        .map_err(|_| format!("Hop {}/{}: Tunnel to {} timed out", hop_num, total_hops, hop.label))?
+        .map_err(|e| format!("Hop {}/{}: Tunnel to {} failed: {}", hop_num, total_hops, hop.label, e))?;
+
+        let stream = channel.into_stream();
+        let config = make_ssh_config();
+        let (key_tx, key_rx) = oneshot::channel::<PublicKey>();
+        let handler = TunnelHandler { host_key_tx: Some(key_tx), forwarded_tx: None };
+
+        let mut new_handle = timeout(CONNECT_TIMEOUT, client::connect_stream(config, stream, handler))
+            .await
+            .map_err(|_| format!("Hop {}/{}: SSH to {} timed out", hop_num, total_hops, hop.label))?
+            .map_err(|e| format!("Hop {}/{}: SSH to {} failed: {}", hop_num, total_hops, hop.label, e))?;
+
+        verify_and_auth_tunnel_hop(
+            tunnel_id, &mut new_handle, key_rx,
+            &hop.hostname, hop.port, &hop.username, &hop.password,
+            known_hosts, pending_verifications, app,
+        ).await?;
+
+        intermediate_handles.push(current_handle);
+        current_handle = new_handle;
+    }
+
+    emit_tunnel_status(app, tunnel_id, "connecting",
+        Some(format!("Connecting to {}:{}...", hostname, port)));
+
+    let channel = timeout(
+        CONNECT_TIMEOUT,
+        current_handle.channel_open_direct_tcpip(hostname, port as u32, "127.0.0.1", 0),
+    )
+    .await
+    .map_err(|_| format!("Tunnel to destination {}:{} timed out", hostname, port))?
+    .map_err(|e| format!("Tunnel to destination {}:{} failed: {}", hostname, port, e))?;
+
+    let stream = channel.into_stream();
+    let config = make_ssh_config();
+    let (key_tx, key_rx) = oneshot::channel::<PublicKey>();
+    let handler = TunnelHandler { host_key_tx: Some(key_tx), forwarded_tx };
+
+    let mut dest_handle = timeout(CONNECT_TIMEOUT, client::connect_stream(config, stream, handler))
+        .await
+        .map_err(|_| format!("SSH to destination {}:{} timed out", hostname, port))?
+        .map_err(|e| format!("SSH to destination {}:{} failed: {}", hostname, port, e))?;
+
+    intermediate_handles.push(current_handle);
+
+    verify_and_auth_tunnel_hop(
+        tunnel_id, &mut dest_handle, key_rx,
+        hostname, port, username, password,
+        known_hosts, pending_verifications, app,
+    ).await?;
+
+    let (keepalive_tx, keepalive_rx) = oneshot::channel::<()>();
+    tokio::spawn(async move {
+        let _handles = intermediate_handles;
+        let _ = keepalive_rx.await;
+    });
+
+    Ok((dest_handle, keepalive_tx))
 }
 
 #[allow(clippy::too_many_arguments)]

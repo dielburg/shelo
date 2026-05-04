@@ -317,7 +317,7 @@ fn emit_status(app: &AppHandle, status: SshStatus) {
     let _ = app.emit("ssh-status", status);
 }
 
-fn resolve_full_hop_chain(
+pub(crate) fn resolve_full_hop_chain(
     host_id: u32,
     all_hosts: &[crate::hosts::store::HostEntry],
     visited: &mut Vec<u32>,
@@ -356,12 +356,12 @@ fn resolve_full_hop_chain(
     Ok(chain)
 }
 
-struct HopInfo {
-    hostname: String,
-    port: u16,
-    username: String,
-    password: String,
-    label: String,
+pub(crate) struct HopInfo {
+    pub(crate) hostname: String,
+    pub(crate) port: u16,
+    pub(crate) username: String,
+    pub(crate) password: String,
+    pub(crate) label: String,
 }
 
 #[tauri::command]

@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.3.2-1
+
+Jump host support for SSH tunnels.
+
+### Bug Fixes
+
+- Fixed SSH tunnels ignoring jump hosts configured for the selected server — tunnels now route through the full hop chain (e.g. A → B → destination) the same way terminal sessions and SFTP do
+- Host key verification is performed at each hop during tunnel establishment, matching the behavior of interactive SSH sessions
+
+
 ## v0.3.1
 
 Bug fixes for SSH auto-reconnect.
